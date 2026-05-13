@@ -2,10 +2,6 @@ import streamlit as st
 import fitz  # PyMuPDF
 import pandas as pd
 import re
-import concurrent.futures
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
-from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -15,95 +11,111 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── GLOBAL CSS (Mobile-Friendly & Aesthetics) ────────────────────────────────
+# ─── GLOBAL CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
-  html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; background-color: #0f1117; color: #e2e8f0; }
+  /* ── Base ── */
+  html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
+    background-color: #0f1117;
+    color: #e2e8f0;
+  }
   .block-container { padding: 2rem 2.5rem 3rem; max-width: 1400px; }
+
+  /* ── Hide default streamlit chrome ── */
   #MainMenu, footer, header { visibility: hidden; }
 
-  .top-banner { display: flex; align-items: center; gap: 1rem; padding: 1.5rem 2rem; background: linear-gradient(135deg, #1a1f2e 0%, #141824 100%); border: 1px solid #2a3147; border-radius: 12px; margin-bottom: 1.8rem; }
+  /* ── Top banner ── */
+  .top-banner {
+    display: flex; align-items: center; gap: 1rem; padding: 1.5rem 2rem;
+    background: linear-gradient(135deg, #1a1f2e 0%, #141824 100%);
+    border: 1px solid #2a3147; border-radius: 12px; margin-bottom: 1.8rem;
+  }
   .banner-icon { font-size: 2.4rem; line-height: 1; }
   .banner-title { font-size: 1.6rem; font-weight: 700; color: #f1f5f9; margin: 0; }
   .banner-sub { font-size: 0.82rem; color: #64748b; margin: 0; margin-top: 0.15rem; }
 
+  /* ── Stat cards ── */
   .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.8rem; }
-  /* Mobile responsiveness */
-  @media (max-width: 768px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 480px) { .stat-grid { grid-template-columns: 1fr; } }
-  
   .stat-card { background: #1a1f2e; border: 1px solid #2a3147; border-radius: 10px; padding: 1.2rem 1.4rem; position: relative; overflow: hidden; }
   .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
-  .stat-card.blue::before  { background: #3b82f6; } .stat-card.green::before { background: #10b981; }
-  .stat-card.amber::before { background: #f59e0b; } .stat-card.purple::before{ background: #8b5cf6; }
+  .stat-card.blue::before  { background: #3b82f6; }
+  .stat-card.green::before { background: #10b981; }
+  .stat-card.amber::before { background: #f59e0b; }
+  .stat-card.purple::before{ background: #8b5cf6; }
   .stat-label { font-size: 0.72rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.4rem; }
   .stat-value { font-size: 2rem; font-weight: 700; color: #f1f5f9; font-family: 'JetBrains Mono', monospace; line-height: 1; }
   .stat-detail { font-size: 0.75rem; color: #475569; margin-top: 0.3rem; }
 
-  .stButton > button { background: linear-gradient(135deg, #3b82f6, #6366f1) !important; color: #fff !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; }
+  /* ── Buttons & Upload ── */
+  .stButton > button {
+    background: linear-gradient(135deg, #3b82f6, #6366f1) !important; color: #fff !important;
+    border: none !important; border-radius: 8px !important; font-weight: 600 !important;
+  }
+  .stDownloadButton > button { background: #10b981 !important; }
   [data-testid="stFileUploader"] { background: #1a1f2e !important; border: 2px dashed #2a3147 !important; border-radius: 10px !important; }
+
+  /* ── Custom UI Elements ── */
   .section-head { font-size: 0.72rem; font-weight: 700; color: #3b82f6; text-transform: uppercase; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.5rem; }
   .section-head::after { content: ''; flex: 1; height: 1px; background: #2a3147; }
+  .log-box { background: #0d1117; border: 1px solid #2a3147; border-radius: 8px; padding: 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #94a3b8; max-height: 200px; overflow-y: auto; }
+  .rule-card { background: #1a1f2e; border: 1px solid #2a3147; border-radius: 10px; padding: 1.4rem; margin-bottom: 1rem; }
+  .rule-title { font-size: 1rem; font-weight: 700; color: #f1f5f9; margin-bottom: 0.6rem; }
+  .rule-id { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #3b82f6; margin-bottom: 0.8rem; }
+  .field-label { font-size: 0.68rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-top: 0.8rem; margin-bottom: 0.2rem; }
+  .field-value { font-size: 0.84rem; color: #cbd5e1; line-height: 1.6; }
+  .empty-state { text-align: center; padding: 4rem 2rem; color: #475569; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── NLP & ML FUNCTIONS ───────────────────────────────────────────────────────
-
-def assign_framework_tags(title: str) -> str:
-    tags = []
-    t = title.lower()
-    if any(k in t for k in ['password', 'credential', 'auth', 'login']): tags.append('ISO 27001: A.9.4.3')
-    if any(k in t for k in ['firewall', 'network', 'port', 'ssh']): tags.append('NIST: PR.AC-5')
-    if any(k in t for k in ['log', 'audit', 'monitor']): tags.append('COBIT 2019: MEA02')
-    if any(k in t for k in ['access', 'user', 'admin']): tags.append('ITIL: Access Management')
-    return " | ".join(tags) if tags else "General IT Control"
-
-def apply_ml_clustering(df: pd.DataFrame) -> pd.DataFrame:
-    if len(df) < 5:
-        df['AI_Domain_Cluster'] = 'Cluster 0'
-        return df
-    vectorizer = TfidfVectorizer(stop_words='english', max_features=100)
-    X = vectorizer.fit_transform(df['Title'].fillna(''))
-    n_clusters = min(6, len(df) // 5)
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    cluster_labels = kmeans.fit_predict(X)
-    df['AI_Domain_Cluster'] = [f"Domain Area {c+1}" for c in cluster_labels]
-    return df
 
 # ─── CORE EXTRACTION LOGIC (PYMUPDF) ──────────────────────────────────────────
 
 def clean_text(text: str) -> str:
-    if not text: return ""
+    if not text:
+        return ""
     text = re.sub(r'Page \d+', '', text)
     text = re.sub(r'Internal Only - General', '', text)
     text = re.sub(r'© \d{4}.+?International', '', text)
     text = re.sub(r'CIS.+?Benchmark', '', text)
     return re.sub(r'\s+', ' ', text).strip()
 
-def extract_single_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
+@st.cache_data(show_spinner=False)
+def extract_rules(pdf_bytes: bytes, filename: str) -> list[dict]:
+    """Ekstrak aturan CIS Benchmark menggunakan PyMuPDF agar bebas OOM."""
     sections = ["Profile Applicability", "Description", "Rationale", "Audit", "Remediation"]
     sections_lower = [s.lower() for s in sections]
+    
     rules = []
     current_rule = None
     
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    
     for page in doc:
         text = page.get_text("text")
-        if not text: continue
+        if not text:
+            continue
 
         for line in text.split('\n'):
             line_clean = line.strip()
-            if not line_clean: continue
+            if not line_clean:
+                continue
 
+            # Detect rule header (longgarkan regex untuk spasi/tab)
             header_match = re.search(r'^(\d+\.\d+(?:\.\d+)+)[\s\t]*(.*)', line_clean)
+            
             if header_match:
-                if current_rule: rules.append(current_rule)
+                if current_rule:
+                    rules.append(current_rule)
+
                 rule_id = header_match.group(1)
                 title_full = header_match.group(2)
+
                 if "...." in title_full or len(title_full) < 5:
-                    current_rule = None; continue
+                    current_rule = None
+                    continue
 
                 level = "N/A"
                 if "(L1)" in title_full: level = "Level 1"
@@ -116,60 +128,82 @@ def extract_single_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
                     "Rule ID": rule_id,
                     "Title": clean_text(title_clean),
                     "Level": level,
-                    "Framework Map": assign_framework_tags(clean_text(title_clean)),
                     "Description": "N/A", "Rationale": "N/A", "Audit": "N/A", "Remediation": "N/A",
-                    "Source File": filename, "_section": None
+                    "Source File": filename,
+                    "_section": None
                 }
                 continue
 
-            if current_rule is None: continue
+            if current_rule is None:
+                continue
 
+            # Detect section transitions (Case-Insensitive)
             line_lower = line_clean.lower()
             switched = False
+            
             for idx, sec_lower in enumerate(sections_lower):
                 if line_lower.startswith(sec_lower):
                     sec_real_name = sections[idx]
                     current_rule["_section"] = sec_real_name
+                    
                     content = line_clean[len(sec_real_name):].replace(":", "").strip()
                     key = "Level" if sec_real_name == "Profile Applicability" else sec_real_name
-                    if content: current_rule[key] = clean_text(content)
+                    
+                    if content:
+                        current_rule[key] = clean_text(content)
                     switched = True
                     break
 
-            if switched: continue
+            if switched:
+                continue
 
+            # Accumulate text
             active_sec = current_rule["_section"]
             if active_sec:
                 key = "Level" if active_sec == "Profile Applicability" else active_sec
                 existing = "" if current_rule[key] == "N/A" else current_rule[key]
                 current_rule[key] = clean_text(existing + " " + line_clean)
 
-    if current_rule: rules.append(current_rule)
+    if current_rule:
+        rules.append(current_rule)
+
     doc.close()
     return rules
 
+
 # ─── SESSION STATE ─────────────────────────────────────────────────────────────
-if "all_rules" not in st.session_state: st.session_state.all_rules = []
-if "processed_files" not in st.session_state: st.session_state.processed_files = []
+if "all_rules" not in st.session_state:
+    st.session_state.all_rules = []
+if "processed_files" not in st.session_state:
+    st.session_state.processed_files = []
+
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown('<div class="section-head">⚙️ Filter & Konfigurasi</div>', unsafe_allow_html=True)
-    level_filter = st.multiselect("Level", ["Level 1", "Level 2", "BitLocker", "Next Gen"], default=["Level 1", "Level 2"])
-    keyword = st.text_input("🔍 Cari Judul / ID")
+
+    level_filter = st.multiselect(
+        "Level",
+        options=["Level 1", "Level 2", "BitLocker", "Next Gen", "N/A"],
+        default=["Level 1", "Level 2"]
+    )
+
+    keyword = st.text_input("🔍 Cari Judul / ID", placeholder="contoh: password, firewall")
 
     st.markdown("---")
-    st.markdown('<div class="section-head">🚀 Aksi Global</div>', unsafe_allow_html=True)
-    if st.button("🧠 Run ML Clustering Ulang", use_container_width=True):
-        if st.session_state.all_rules:
-            df_temp = pd.DataFrame(st.session_state.all_rules)
-            df_temp = apply_ml_clustering(df_temp)
-            st.session_state.all_rules = df_temp.to_dict('records')
-            st.rerun()
-            
-    if st.button("🗑️ Reset Semua Data", use_container_width=True):
-        st.session_state.all_rules = []; st.session_state.processed_files = []
+    st.markdown('<div class="section-head">📊 Export CSV</div>', unsafe_allow_html=True)
+    export_cols = st.multiselect(
+        "Kolom yang diekspor",
+        options=["Rule ID", "Title", "Level", "Description", "Rationale", "Audit", "Remediation", "Source File"],
+        default=["Rule ID", "Title", "Level", "Description", "Rationale", "Audit", "Remediation", "Source File"],
+    )
+
+    st.markdown("---")
+    if st.button("🗑️ Reset Semua Data"):
+        st.session_state.all_rules = []
+        st.session_state.processed_files = []
         st.rerun()
+
 
 # ─── MAIN CONTENT ─────────────────────────────────────────────────────────────
 st.markdown("""
@@ -177,33 +211,33 @@ st.markdown("""
   <div class="banner-icon">🛡️</div>
   <div>
     <p class="banner-title">CIS Benchmark Extractor Pro</p>
-    <p class="banner-sub">Multiprocessing · AI Clustering · Juklak Generator · Jira Ready</p>
+    <p class="banner-sub">Optimized Engine · CSV Output · Smart Filtering</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
+st.markdown('<div class="section-head">📤 Upload PDF</div>', unsafe_allow_html=True)
 uploaded_files = st.file_uploader("Seret & lepas file PDF", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
 
-if st.button("⚡ Ekstrak Paralel (Multiprocessing)", disabled=not uploaded_files):
-    new_files = [uf for uf in uploaded_files if uf.name not in st.session_state.processed_files]
-    if new_files:
-        with st.spinner(f"Memproses {len(new_files)} dokumen secara paralel..."):
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = {executor.submit(extract_single_pdf, uf.read(), uf.name): uf for uf in new_files}
-                for future in concurrent.futures.as_completed(futures):
-                    st.session_state.all_rules.extend(future.result())
-                    st.session_state.processed_files.append(futures[future].name)
+if st.button("⚡ Mulai Ekstraksi", disabled=not uploaded_files):
+    for uf in uploaded_files:
+        if uf.name in st.session_state.processed_files:
+            continue
             
-            if st.session_state.all_rules:
-                df_temp = pd.DataFrame(st.session_state.all_rules)
-                df_temp = apply_ml_clustering(df_temp)
-                st.session_state.all_rules = df_temp.to_dict('records')
+        with st.spinner(f"Mengekstrak {uf.name} (PyMuPDF Engine)..."):
+            try:
+                rules = extract_rules(uf.read(), uf.name)
+                st.session_state.all_rules.extend(rules)
+                st.session_state.processed_files.append(uf.name)
+            except Exception as e:
+                st.error(f"Error pada {uf.name}: {e}")
     st.rerun()
 
 # ─── DATA & VISUALIZATION ─────────────────────────────────────────────────────
 if st.session_state.all_rules:
     df_raw = pd.DataFrame(st.session_state.all_rules)
 
+    # Filter Logic (SMART FILTER - str.contains)
     df = df_raw.copy()
     if level_filter:
         pattern = '|'.join([re.escape(lvl) for lvl in level_filter])
@@ -211,133 +245,105 @@ if st.session_state.all_rules:
         
     if keyword.strip():
         kw = keyword.strip().lower()
-        mask = (df["Title"].str.lower().str.contains(kw, na=False) | df["Rule ID"].str.lower().str.contains(kw, na=False))
+        mask = (
+            df["Title"].str.lower().str.contains(kw, na=False) |
+            df["Rule ID"].str.lower().str.contains(kw, na=False) |
+            df["Description"].str.lower().str.contains(kw, na=False)
+        )
         df = df[mask]
+
+    # Stats
+    total_raw = len(df_raw)
+    total_filt = len(df)
+    l1_count = len(df[df["Level"].str.contains("Level 1", case=False, na=False)])
+    files_count = df_raw["Source File"].nunique() if "Source File" in df_raw.columns else 0
 
     st.markdown(f"""
     <div class="stat-grid">
-      <div class="stat-card blue"><div class="stat-label">Total Aturan</div><div class="stat-value">{len(df_raw):,}</div><div class="stat-detail">dari {df_raw["Source File"].nunique()} dokumen</div></div>
-      <div class="stat-card green"><div class="stat-label">Tampil di Tabel</div><div class="stat-value">{len(df):,}</div><div class="stat-detail">aturan (terfilter)</div></div>
-      <div class="stat-card amber"><div class="stat-label">Level 1</div><div class="stat-value">{len(df[df["Level"].str.contains("Level 1", case=False, na=False)]):,}</div><div class="stat-detail">aturan dasar</div></div>
-      <div class="stat-card purple"><div class="stat-label">Domain Area (ML)</div><div class="stat-value">{df["AI_Domain_Cluster"].nunique() if "AI_Domain_Cluster" in df.columns else 0}</div><div class="stat-detail">K-Means Clustering</div></div>
+      <div class="stat-card blue">
+        <div class="stat-label">Total Aturan</div>
+        <div class="stat-value">{total_raw:,}</div>
+        <div class="stat-detail">dari {files_count} file PDF</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Hasil Filter</div>
+        <div class="stat-value">{total_filt:,}</div>
+        <div class="stat-detail">aturan ditampilkan</div>
+      </div>
+      <div class="stat-card amber">
+        <div class="stat-label">Level 1</div>
+        <div class="stat-value">{l1_count:,}</div>
+        <div class="stat-detail">aturan dasar</div>
+      </div>
+      <div class="stat-card purple">
+        <div class="stat-label">File Diproses</div>
+        <div class="stat-value">{files_count}</div>
+        <div class="stat-detail">dokumen benchmark</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
-    tab_grid, tab_juklak, tab_chart = st.tabs(["⚡ Interactive Grid", "📝 Juklak/SOP Generator", "📊 AI & Framework"])
+    # Tabs
+    tab_table, tab_detail, tab_chart = st.tabs(["📋 Tabel Data", "🔍 Detail Aturan", "📊 Distribusi"])
 
-    # TAB 1: INTERACTIVE AG-GRID
-    with tab_grid:
-        st.caption("Pilih baris tabel untuk melihat detail di Tab Juklak/SOP Generator.")
-        display_cols = ["Rule ID", "Title", "Level", "Framework Map", "AI_Domain_Cluster", "Source File"]
-        df_display = df[[c for c in display_cols if c in df.columns]]
-        
-        gb = GridOptionsBuilder.from_dataframe(df_display)
-        gb.configure_pagination(paginationAutoPageSize=True)
-        gb.configure_side_bar()
-        gb.configure_selection('single', use_checkbox=True)
-        grid_response = AgGrid(
-            df_display, 
-            gridOptions=gb.build(),
-            update_on='selectionChanged', # FIX UNTUK DEPRECATION WARNING
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            theme='balham'
-        )
+    with tab_table:
+        display_cols = [c for c in ["Rule ID", "Title", "Level", "Description", "Source File"] if c in df.columns]
+        st.dataframe(df[display_cols].reset_index(drop=True), use_container_width=True, height=480)
 
-    # TAB 2: JUKLAK / SOP GENERATOR (Personalized)
-# TAB 2: JUKLAK / SOP GENERATOR (Personalized)
-    with tab_juklak:
-        # Menangkap data seleksi dengan lebih fleksibel
-        selected = grid_response.get('selected_rows', [])
-        
-        # Cek apakah ada data yang dipilih
-        has_selection = False
-        sel_id = None
-
-        if selected is not None:
-            # Skenario 1: Jika formatnya Pandas DataFrame
-            if isinstance(selected, pd.DataFrame) and not selected.empty:
-                sel_id = selected.iloc[0]['Rule ID']
-                has_selection = True
-            # Skenario 2: Jika formatnya List (List of Dicts atau List of Rows)
-            elif isinstance(selected, list) and len(selected) > 0:
-                # Ambil item pertama, cek jika itu dict atau object
-                item = selected[0]
-                sel_id = item.get('Rule ID') if isinstance(item, dict) else item['Rule ID']
-                has_selection = True
-
-        if has_selection and sel_id:
-            try:
-                # Ambil data lengkap dari dataframe utama berdasarkan Rule ID
-                rule_data = df[df['Rule ID'] == sel_id].iloc[0]
-                
-                st.markdown('<div class="section-head">📄 Auto-Generated Draft</div>', unsafe_allow_html=True)
-                
-                # Draft disesuaikan dengan struktur organisasi di PNM (RSP & ATI)
-                draft_text = f"""### PETUNJUK PELAKSANAAN (JUKLAK) KEAMANAN ASET IT
-**Terkait:** {rule_data['Title']} ({rule_data['Rule ID']})
-**Framework Relasi:** {rule_data.get('Framework Map', 'N/A')}
-**Domain Area:** {rule_data.get('AI_Domain_Cluster', 'Unclassified')}
-
----
-
-**1. TUJUAN**
-Memastikan pemenuhan postur keamanan siber organisasi selaras dengan standar operasional yang berlaku, khususnya pada kontrol `{rule_data['Title']}`.
-
-**2. RUANG LINGKUP & TANGGUNG JAWAB**
-* **Fungsi PMO (Rencana Strategi Perusahaan - RSP):** Melakukan tracking pemenuhan kontrol, koordinasi pemenuhan maturity siber, dan integrasi audit (seperti User Access Review).
-* **Fungsi Eksekusi (Aplikasi dan Teknologi Informasi - ATI):** Menerapkan prosedur hardening, pengelolaan konfigurasi teknis, dan remediasi pada aset IT terkait.
-
-**3. RASIONALISASI KONTROL**
-{rule_data['Rationale']}
-
-**4. PROSEDUR HARDENING / REMEDIASI (TUGAS TIM ATI)**
-Langkah-langkah teknis yang harus dikonfigurasi:
-> {rule_data['Remediation']}
-
-**5. PROSEDUR AUDIT & REVIEW (TUGAS TIM RSP / AUDITOR)**
-Metode untuk memverifikasi kepatuhan kontrol:
-> {rule_data['Audit']}
-"""
-                st.markdown(f'<div style="background:#1a1f2e; padding:2rem; border-radius:10px; border:1px solid #2a3147;">{draft_text}</div>', unsafe_allow_html=True)
-                
-                st.download_button(
-                    label=f"💾 Download Draft {rule_data['Rule ID']}",
-                    data=draft_text,
-                    file_name=f"Juklak_{rule_data['Rule ID']}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Gagal memproses detail aturan: {str(e)}")
+    with tab_detail:
+        if len(df) == 0:
+            st.info("Tidak ada aturan yang cocok dengan filter.")
         else:
-            st.warning("⚠️ Silakan kembali ke tab **Interactive Grid** dan pastikan Anda sudah **mencentang** salah satu baris aturan.")
+            rule_options = df.apply(lambda r: f"{r['Rule ID']} — {r['Title'][:70]}", axis=1).tolist()
+            selected_label = st.selectbox("Pilih aturan:", rule_options, label_visibility="collapsed")
+            row = df.iloc[rule_options.index(selected_label)]
             
-    # TAB 3: CHARTS
+            st.markdown(f"""
+            <div class="rule-card">
+              <div class="rule-id">{row['Rule ID']} &nbsp;({row['Level']})</div>
+              <div class="rule-title">{row['Title']}</div>
+              <div class="field-label">📄 Deskripsi</div>
+              <div class="field-value">{row['Description']}</div>
+              <div class="field-label">💡 Rasional</div>
+              <div class="field-value">{row['Rationale']}</div>
+              <div class="field-label">🔎 Audit</div>
+              <div class="field-value">{row['Audit']}</div>
+              <div class="field-label">🔧 Remediasi</div>
+              <div class="field-value">{row['Remediation']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
     with tab_chart:
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown('<div class="section-head">AI Clustering (Topik Serupa)</div>', unsafe_allow_html=True)
-            if "AI_Domain_Cluster" in df.columns: st.bar_chart(df["AI_Domain_Cluster"].value_counts())
+            st.markdown('<div class="section-head">Distribusi Level</div>', unsafe_allow_html=True)
+            # Membersihkan tampilan Level untuk chart (meringkas "Level 1 - Server" jadi "Level 1")
+            clean_levels = df["Level"].apply(lambda x: "Level 1" if "Level 1" in str(x) else ("Level 2" if "Level 2" in str(x) else x))
+            st.bar_chart(clean_levels.value_counts())
         with c2:
-            st.markdown('<div class="section-head">Distribusi Framework Tagging</div>', unsafe_allow_html=True)
-            st.bar_chart(df["Framework Map"].value_counts().head(5))
+            st.markdown('<div class="section-head">Distribusi File</div>', unsafe_allow_html=True)
+            if "Source File" in df.columns:
+                st.bar_chart(df["Source File"].str[:25].value_counts())
 
-    # ─── EXPORT SECTION ─────────────────────────────────────────────────────────
+    # ─── EXPORT CSV ─────────────────────────────────────────────────────────────
     st.markdown("---")
-    c1, c2 = st.columns(2)
+    st.markdown('<div class="section-head">💾 Export ke CSV (Hemat Memori)</div>', unsafe_allow_html=True)
     
-    with c1:
-        st.markdown('<div class="section-head">💾 Export Data Standar (CSV)</div>', unsafe_allow_html=True)
-        csv_data = df.drop(columns=["_section"], errors="ignore").to_csv(index=False).encode('utf-8')
-        st.download_button(label=f"⬇️ Download Full CSV ({len(df):,} baris)", data=csv_data, file_name="CIS_Full_Report.csv", mime="text/csv", use_container_width=True)
+    export_scope = st.radio("Cakupan Export:", ["Hasil filter saja", "Semua data (tanpa filter)"], horizontal=True)
+    df_export = df if export_scope == "Hasil filter saja" else df_raw
+    export_cols_valid = [c for c in export_cols if c in df_export.columns]
 
-    with c2:
-        st.markdown('<div class="section-head">🎫 Export ke format Jira / Trello (CSV)</div>', unsafe_allow_html=True)
-        df_jira = pd.DataFrame({
-            'Summary': '[CIS] ' + df['Rule ID'] + ' - ' + df['Title'],
-            'Description': 'Level: ' + df['Level'] + '\n\n*Rationale:*\n' + df['Rationale'] + '\n\n*Remediation:*\n' + df['Remediation'],
-            'Issue Type': 'Task',
-            'Labels': df['Framework Map'].str.replace(' | ', ',', regex=False)
-        })
-        jira_csv = df_jira.to_csv(index=False).encode('utf-8')
-        st.download_button(label=f"⬇️ Download CSV for Jira Import", data=jira_csv, file_name="Jira_Import.csv", mime="text/csv", use_container_width=True)
+    # Drop helper column sebelum di-export
+    df_final = df_export[export_cols_valid].copy()
+    if "_section" in df_final.columns:
+        df_final = df_final.drop(columns=["_section"])
+
+    csv_data = df_final.to_csv(index=False).encode('utf-8')
+    
+    st.download_button(
+        label=f"⬇️ Download CSV ({len(df_final):,} baris)",
+        data=csv_data,
+        file_name="CIS_Benchmark_Report.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
