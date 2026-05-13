@@ -8,41 +8,40 @@ import os
 import time
 import plotly.express as px
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (V9.9 - ATOMIC SENSITIVITY) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - PREDATOR 8.7) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
-# FIX: Hilangkan anchor ^ dan buat lebih fleksibel nangkep "Applicability"
-RE_SECTION = re.compile(r'(Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References)', re.IGNORECASE)
+RE_SECTION = re.compile(r'(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
 RE_CLEAN = re.compile(r'(Page \d+|Internal Only - General|P a g e \| \d+|CIS (?:Microsoft|Windows|Debian|Ubuntu).*?Benchmark)', re.IGNORECASE)
 
 SECTION_MAP = {
-    "profile applicability": "Level", "applicability": "Level", 
-    "description": "Description", "rationale": "Rationale", 
-    "impact": "Impact", "audit": "Audit", "remediation": "Remediation", 
-    "default value": "Default Value", "references": "References"
+    "profile applicability": "Level", "description": "Description",
+    "rationale": "Rationale", "impact": "Impact", "audit": "Audit",
+    "remediation": "Remediation", "default value": "Default Value",
+    "references": "References"
 }
 
 def clean_fast(text_list):
     if not text_list: return "N/A"
-    # Deduplikasi & Clean whitespace
+    # Deduplikasi baris (Fix Masalah Level Berulang)
     unique_items = list(dict.fromkeys([t.strip() for t in text_list if t.strip()]))
     full = " ".join(unique_items)
     full = RE_CLEAN.sub('', full)
     return " ".join(full.split()).strip() or "N/A"
 
-# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL + REINFORCED) ---
+# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL) ---
 def predator_engine(pdf_stream):
     doc = fitz.open(stream=pdf_stream, filetype="pdf")
     total_pages = len(doc)
     all_pages_content = []
     master_toc = {}
 
-    # ToC Scan lebih dalam (60 hal) buat jaga-jaga benchmark tebal
+    # Caching pages & ToC Mapping
     for i in range(total_pages):
         page_text = doc[i].get_text("text")
         lines = [line.strip() for line in page_text.split('\n') if line.strip()]
         all_pages_content.append(lines)
-        if i < 60:
+        if i < 25:
             for line in lines:
                 match = RE_TOC_LINE.search(line)
                 if match and "...." in line:
@@ -53,10 +52,10 @@ def predator_engine(pdf_stream):
     final_results = []
 
     for i, rid in enumerate(all_ids):
-        # FIX: Perlebar range halaman (-5 sampai +5) buat handle ToC yang meleset jauh
-        start_idx = max(0, master_toc[rid]["page"] - 5)
+        # Memory Slicing Range
+        start_idx = max(0, master_toc[rid]["page"] - 3)
         next_rid = all_ids[i+1] if i+1 < len(all_ids) else None
-        end_idx = min(total_pages, (master_toc[next_rid]["page"] + 5) if next_rid else total_pages)
+        end_idx = min(total_pages, (master_toc[next_rid]["page"] + 2) if next_rid else total_pages)
 
         rule_data = {
             "Rule ID": rid, "Title": [], "Level": [], "Description": [],
@@ -69,37 +68,24 @@ def predator_engine(pdf_stream):
             page_lines = all_pages_content[p]
             for line in page_lines:
                 h_match = RE_HEADER.search(line)
-                
-                # Rule Identification
                 if h_match and h_match.group(1) == rid:
                     rule_data["Title"].append(h_match.group(2))
                     found = True
                     continue
                 
-                # Stop if next rule starts
                 if found and h_match and h_match.group(1) != rid:
                     if h_match.group(1) in master_toc:
                         break 
                 
                 if found:
-                    # FIX: Gunakan .search() supaya nangkep keyword di tengah baris sekalipun
                     s_match = RE_SECTION.search(line)
                     if s_match:
-                        key_lower = s_match.group(0).lower() # Group 0 untuk nangkep full keyword
-                        # Mapping fleksibel (handle 'Applicability' doang atau full)
-                        target_key = "Level" if "applicability" in key_lower else SECTION_MAP.get(key_lower, "Description")
-                        rule_data["current_key"] = target_key
-                        
+                        key_lower = s_match.group(1).lower()
+                        rule_data["current_key"] = SECTION_MAP.get(key_lower, "Description")
                         content = RE_SECTION.sub('', line).strip()
                         if content: rule_data[rule_data["current_key"]].append(content)
                     else:
-                        # ATOMIC FIX: Kalau nemu "Level 1" atau "Level 2" tapi section belum ketemu,
-                        # paksa masuk ke kolom Level. Sering terjadi di rule 1.1.x
-                        if ("Level 1" in line or "Level 2" in line) and len(rule_data["Level"]) == 0:
-                            rule_data["Level"].append(line)
-                        else:
-                            rule_data[rule_data["current_key"]].append(line)
-                            
+                        rule_data[rule_data["current_key"]].append(line)
             if found and h_match and h_match.group(1) in master_toc and h_match.group(1) != rid:
                 break
 
@@ -118,19 +104,27 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND TITAN UI ---
+# --- 3. FRONTEND UI ---
 def main():
-    st.set_page_config(page_title="Titan Predator v9.9", layout="wide", page_icon="🛡️")
-    st.title("🛡️ Predator Engine: Atomic v9.9")
+    st.set_page_config(page_title="Titan Predator v8.7", layout="wide", page_icon="🛡️")
     
-    # CSS UI
-    st.markdown("""<style>.stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border-left: 5px solid #00d4ff; }</style>""", unsafe_allow_html=True)
+    st.title("🛡️ Predator Engine: CIS Pro Analyzer")
+    st.caption("IT Governance & Policy Optimization Tool | PNM Execution")
+
+    with st.sidebar:
+        st.header("Control Center")
+        st.success("Checkpoint: Titan 8.7")
+        st.divider()
+        if st.button("Reset Cache"):
+            st.session_state.clear()
+            st.rerun()
 
     uploaded_file = st.file_uploader("Upload CIS Benchmark PDF", type="pdf")
+
     if uploaded_file:
-        if st.button("🚀 EXECUTE ATOMIC SCAN", type="primary", width="stretch"):
+        if st.button("🚀 RUN PREDATOR ENGINE", type="primary", width="stretch"):
             start_t = time.time()
-            with st.status("Atomic Engine is hunting... No N/A allowed!", expanded=True):
+            with st.status("Engine is hunting... 🎯", expanded=True):
                 data = predator_engine(uploaded_file.read())
                 if data:
                     st.session_state['data'] = pd.DataFrame(data)
@@ -140,19 +134,34 @@ def main():
 
     if 'data' in st.session_state:
         df = st.session_state['data']
-        # Executive Summary
+        
+        # Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Rules", len(df))
-        m4.metric("Hunt Speed", f"{st.session_state['speed']:.2f}s")
-        
-        # Display Table
-        st.dataframe(df, width="stretch")
-        
-        # Export
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
-        st.download_button("📥 Download Master Result", output.getvalue(), "CIS_Audit_Titan.xlsx", width="stretch")
+        m2.metric("L1 Controls", len(df[df['Level'].str.contains('L1|Level 1', case=False, na=False)]))
+        m3.metric("L2 Controls", len(df[df['Level'].str.contains('L2|Level 2', case=False, na=False)]))
+        m4.metric("Engine Speed", f"{st.session_state['speed']:.2f}s")
+
+        tab_data, tab_viz, tab_export = st.tabs(["🔍 Data Explorer", "📊 Analytics", "📥 Export Result"])
+
+        with tab_data:
+            search = st.text_input("Global Search:", "")
+            display_df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)] if search else df
+            st.dataframe(display_df, width="stretch")
+
+        with tab_viz:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(px.pie(df, names='Level', hole=0.4, title="Control Levels"), width="stretch")
+            with c2:
+                df['Cat'] = df['Rule ID'].str.split('.').str[0]
+                st.plotly_chart(px.bar(df.groupby('Cat').size().reset_index(name='Count'), x='Cat', y='Count', title="Rules by Category"), width="stretch")
+
+        with tab_export:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
+            st.download_button("📥 Download Master Excel", output.getvalue(), "CIS_Audit_Checklist.xlsx", width="stretch")
 
 if __name__ == "__main__":
     main()
