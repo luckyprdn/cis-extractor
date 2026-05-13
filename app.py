@@ -5,7 +5,7 @@ import re
 import concurrent.futures
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode
+from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -52,7 +52,6 @@ st.markdown("""
 # ─── NLP & ML FUNCTIONS ───────────────────────────────────────────────────────
 
 def assign_framework_tags(title: str) -> str:
-    """Auto-tagging kontrol CIS ke Framework IT Governance."""
     tags = []
     t = title.lower()
     if any(k in t for k in ['password', 'credential', 'auth', 'login']): tags.append('ISO 27001: A.9.4.3')
@@ -62,16 +61,13 @@ def assign_framework_tags(title: str) -> str:
     return " | ".join(tags) if tags else "General IT Control"
 
 def apply_ml_clustering(df: pd.DataFrame) -> pd.DataFrame:
-    """Clustering otomatis menggunakan K-Means (Machine Learning)."""
     if len(df) < 5:
         df['AI_Domain_Cluster'] = 'Cluster 0'
         return df
-    
     vectorizer = TfidfVectorizer(stop_words='english', max_features=100)
     X = vectorizer.fit_transform(df['Title'].fillna(''))
-    n_clusters = min(6, len(df) // 5) # Maksimal 6 domain area
+    n_clusters = min(6, len(df) // 5)
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    
     cluster_labels = kmeans.fit_predict(X)
     df['AI_Domain_Cluster'] = [f"Domain Area {c+1}" for c in cluster_labels]
     return df
@@ -87,7 +83,6 @@ def clean_text(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip()
 
 def extract_single_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
-    """Ekstrak aturan dari satu PDF (dirancang untuk Multiprocessing)."""
     sections = ["Profile Applicability", "Description", "Rationale", "Audit", "Remediation"]
     sections_lower = [s.lower() for s in sections]
     rules = []
@@ -105,10 +100,8 @@ def extract_single_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
             header_match = re.search(r'^(\d+\.\d+(?:\.\d+)+)[\s\t]*(.*)', line_clean)
             if header_match:
                 if current_rule: rules.append(current_rule)
-
                 rule_id = header_match.group(1)
                 title_full = header_match.group(2)
-
                 if "...." in title_full or len(title_full) < 5:
                     current_rule = None; continue
 
@@ -195,14 +188,12 @@ if st.button("⚡ Ekstrak Paralel (Multiprocessing)", disabled=not uploaded_file
     new_files = [uf for uf in uploaded_files if uf.name not in st.session_state.processed_files]
     if new_files:
         with st.spinner(f"Memproses {len(new_files)} dokumen secara paralel..."):
-            # Multiprocessing untuk ekstraksi secepat kilat
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = {executor.submit(extract_single_pdf, uf.read(), uf.name): uf for uf in new_files}
                 for future in concurrent.futures.as_completed(futures):
                     st.session_state.all_rules.extend(future.result())
                     st.session_state.processed_files.append(futures[future].name)
             
-            # Jalankan ML Clustering Otomatis
             if st.session_state.all_rules:
                 df_temp = pd.DataFrame(st.session_state.all_rules)
                 df_temp = apply_ml_clustering(df_temp)
@@ -247,22 +238,30 @@ if st.session_state.all_rules:
         grid_response = AgGrid(
             df_display, 
             gridOptions=gb.build(),
-            update_mode=GridUpdateMode.SELECTION_CHANGED,
+            update_on='selectionChanged', # FIX UNTUK DEPRECATION WARNING
             columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            theme='balham' # Tema gelap kompak
+            theme='balham'
         )
 
     # TAB 2: JUKLAK / SOP GENERATOR (Personalized)
     with tab_juklak:
         selected = grid_response['selected_rows']
+        
+        # FIX UNTUK KEYERROR: Pengecekan Aman Apakah Formatnya DataFrame Atau Bukan
         if selected is not None and len(selected) > 0:
-            # Pandas 2.0+ compability untuk AgGrid response
-            sel_id = selected[0]['Rule ID'] if isinstance(selected[0], dict) else selected.iloc[0]['Rule ID']
-            rule_data = df[df['Rule ID'] == sel_id].iloc[0]
-            
-            st.markdown('<div class="section-head">📄 Auto-Generated Draft</div>', unsafe_allow_html=True)
-            
-            draft_text = f"""### PETUNJUK PELAKSANAAN (JUKLAK) KEAMANAN ASET IT
+            try:
+                # Jika versi st_aggrid mereturn pandas DataFrame
+                if isinstance(selected, pd.DataFrame):
+                    sel_id = selected.iloc[0]['Rule ID']
+                # Jika versi st_aggrid mereturn list of dictionary
+                else:
+                    sel_id = selected[0]['Rule ID']
+                    
+                rule_data = df[df['Rule ID'] == sel_id].iloc[0]
+                
+                st.markdown('<div class="section-head">📄 Auto-Generated Draft</div>', unsafe_allow_html=True)
+                
+                draft_text = f"""### PETUNJUK PELAKSANAAN (JUKLAK) KEAMANAN ASET IT
 **Terkait:** {rule_data['Title']} ({rule_data['Rule ID']})
 **Framework Relasi:** {rule_data.get('Framework Map', 'N/A')}
 
@@ -272,8 +271,8 @@ if st.session_state.all_rules:
 Memastikan pemenuhan postur keamanan siber organisasi selaras dengan standar operasional yang berlaku, khususnya pada kontrol `{rule_data['Title']}`.
 
 **2. RUANG LINGKUP & TANGGUNG JAWAB**
-*   **Fungsi PMO (Rencana Strategi Perusahaan - RSP):** Melakukan tracking pemenuhan kontrol dan integrasi audit (UAR).
-*   **Fungsi Eksekusi (Aplikasi dan Teknologi Informasi - ATI):** Menerapkan prosedur hardening dan remediasi teknis pada aset terkait.
+* **Fungsi PMO (Rencana Strategi Perusahaan - RSP):** Melakukan tracking pemenuhan kontrol dan integrasi audit (UAR).
+* **Fungsi Eksekusi (Aplikasi dan Teknologi Informasi - ATI):** Menerapkan prosedur hardening dan remediasi teknis pada aset terkait.
 
 **3. RASIONALISASI KONTROL**
 {rule_data['Rationale']}
@@ -286,8 +285,10 @@ Langkah-langkah teknis yang harus dikonfigurasi:
 Metode untuk memverifikasi kepatuhan kontrol:
 > {rule_data['Audit']}
 """
-            st.markdown(f'<div style="background:#1a1f2e; padding:2rem; border-radius:10px; border:1px solid #2a3147;">{draft_text}</div>', unsafe_allow_html=True)
-            st.download_button("💾 Download Draft Juklak (Markdown)", draft_text, file_name=f"Juklak_{rule_data['Rule ID']}.md", mime="text/markdown")
+                st.markdown(f'<div style="background:#1a1f2e; padding:2rem; border-radius:10px; border:1px solid #2a3147;">{draft_text}</div>', unsafe_allow_html=True)
+                st.download_button("💾 Download Draft Juklak (Markdown)", draft_text, file_name=f"Juklak_{rule_data['Rule ID']}.md", mime="text/markdown")
+            except Exception as e:
+                st.error(f"Terjadi kesalahan saat memuat detail: {str(e)}")
         else:
             st.info("Pilih satu aturan di tab 'Interactive Grid' terlebih dahulu untuk membuat draft Juklak otomatis.")
 
@@ -312,7 +313,6 @@ Metode untuk memverifikasi kepatuhan kontrol:
 
     with c2:
         st.markdown('<div class="section-head">🎫 Export ke format Jira / Trello (CSV)</div>', unsafe_allow_html=True)
-        # Menyiapkan kolom khusus untuk import ke sistem Ticketing
         df_jira = pd.DataFrame({
             'Summary': '[CIS] ' + df['Rule ID'] + ' - ' + df['Title'],
             'Description': 'Level: ' + df['Level'] + '\n\n*Rationale:*\n' + df['Rationale'] + '\n\n*Remediation:*\n' + df['Remediation'],
