@@ -86,10 +86,11 @@ def clean_text(text: str) -> str:
 def extract_rules(pdf_bytes: bytes, filename: str) -> list[dict]:
     """Ekstrak aturan CIS Benchmark menggunakan PyMuPDF agar bebas OOM."""
     sections = ["Profile Applicability", "Description", "Rationale", "Audit", "Remediation"]
+    sections_lower = [s.lower() for s in sections]
+    
     rules = []
     current_rule = None
     
-    # Membaca dari memori (bytes) menggunakan fitz
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     
     for page in doc:
@@ -98,11 +99,15 @@ def extract_rules(pdf_bytes: bytes, filename: str) -> list[dict]:
             continue
 
         for line in text.split('\n'):
-            # Detect rule header
-            header_match = re.search(r'^(\d+\.\d+(?:\.\d+)+)\s+(.*)', line.strip())
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+
+            # Detect rule header (longgarkan regex untuk spasi/tab)
+            header_match = re.search(r'^(\d+\.\d+(?:\.\d+)+)[\s\t]*(.*)', line_clean)
             
             if header_match:
-                if current_rule and current_rule['Description'] != "N/A":
+                if current_rule:
                     rules.append(current_rule)
 
                 rule_id = header_match.group(1)
@@ -129,17 +134,21 @@ def extract_rules(pdf_bytes: bytes, filename: str) -> list[dict]:
                 }
                 continue
 
-            # Bypass jika current_rule belum terbentuk
             if current_rule is None:
                 continue
 
-            # Detect section transitions
+            # Detect section transitions (Case-Insensitive)
+            line_lower = line_clean.lower()
             switched = False
-            for sec in sections:
-                if line.strip().startswith(sec):
-                    current_rule["_section"] = sec
-                    content = line.replace(sec, "").replace(":", "").strip()
-                    key = "Level" if sec == "Profile Applicability" else sec
+            
+            for idx, sec_lower in enumerate(sections_lower):
+                if line_lower.startswith(sec_lower):
+                    sec_real_name = sections[idx]
+                    current_rule["_section"] = sec_real_name
+                    
+                    content = line_clean[len(sec_real_name):].replace(":", "").strip()
+                    key = "Level" if sec_real_name == "Profile Applicability" else sec_real_name
+                    
                     if content:
                         current_rule[key] = clean_text(content)
                     switched = True
@@ -153,9 +162,9 @@ def extract_rules(pdf_bytes: bytes, filename: str) -> list[dict]:
             if active_sec:
                 key = "Level" if active_sec == "Profile Applicability" else active_sec
                 existing = "" if current_rule[key] == "N/A" else current_rule[key]
-                current_rule[key] = clean_text(existing + " " + line)
+                current_rule[key] = clean_text(existing + " " + line_clean)
 
-    if current_rule and current_rule['Description'] != "N/A":
+    if current_rule:
         rules.append(current_rule)
 
     doc.close()
@@ -202,7 +211,7 @@ st.markdown("""
   <div class="banner-icon">🛡️</div>
   <div>
     <p class="banner-title">CIS Benchmark Extractor Pro</p>
-    <p class="banner-sub">Optimized Engine · CSV Output · Memory Safe</p>
+    <p class="banner-sub">Optimized Engine · CSV Output · Smart Filtering</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -225,13 +234,13 @@ if st.button("⚡ Mulai Ekstraksi", disabled=not uploaded_files):
     st.rerun()
 
 # ─── DATA & VISUALIZATION ─────────────────────────────────────────────────────
-# Filter Logic
+if st.session_state.all_rules:
+    df_raw = pd.DataFrame(st.session_state.all_rules)
+
+    # Filter Logic (SMART FILTER - str.contains)
     df = df_raw.copy()
-    
     if level_filter:
-        # Ubah list level menjadi pola regex, misal: 'Level 1|Level 2'
         pattern = '|'.join([re.escape(lvl) for lvl in level_filter])
-        # Gunakan str.contains agar "Level 1 - Server" tetap terdeteksi sebagai Level 1
         df = df[df["Level"].str.contains(pattern, case=False, na=False)]
         
     if keyword.strip():
@@ -246,9 +255,76 @@ if st.button("⚡ Mulai Ekstraksi", disabled=not uploaded_files):
     # Stats
     total_raw = len(df_raw)
     total_filt = len(df)
-    # Perbaiki juga penghitungan stat card agar menggunakan str.contains
     l1_count = len(df[df["Level"].str.contains("Level 1", case=False, na=False)])
     files_count = df_raw["Source File"].nunique() if "Source File" in df_raw.columns else 0
+
+    st.markdown(f"""
+    <div class="stat-grid">
+      <div class="stat-card blue">
+        <div class="stat-label">Total Aturan</div>
+        <div class="stat-value">{total_raw:,}</div>
+        <div class="stat-detail">dari {files_count} file PDF</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Hasil Filter</div>
+        <div class="stat-value">{total_filt:,}</div>
+        <div class="stat-detail">aturan ditampilkan</div>
+      </div>
+      <div class="stat-card amber">
+        <div class="stat-label">Level 1</div>
+        <div class="stat-value">{l1_count:,}</div>
+        <div class="stat-detail">aturan dasar</div>
+      </div>
+      <div class="stat-card purple">
+        <div class="stat-label">File Diproses</div>
+        <div class="stat-value">{files_count}</div>
+        <div class="stat-detail">dokumen benchmark</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Tabs
+    tab_table, tab_detail, tab_chart = st.tabs(["📋 Tabel Data", "🔍 Detail Aturan", "📊 Distribusi"])
+
+    with tab_table:
+        display_cols = [c for c in ["Rule ID", "Title", "Level", "Description", "Source File"] if c in df.columns]
+        st.dataframe(df[display_cols].reset_index(drop=True), use_container_width=True, height=480)
+
+    with tab_detail:
+        if len(df) == 0:
+            st.info("Tidak ada aturan yang cocok dengan filter.")
+        else:
+            rule_options = df.apply(lambda r: f"{r['Rule ID']} — {r['Title'][:70]}", axis=1).tolist()
+            selected_label = st.selectbox("Pilih aturan:", rule_options, label_visibility="collapsed")
+            row = df.iloc[rule_options.index(selected_label)]
+            
+            st.markdown(f"""
+            <div class="rule-card">
+              <div class="rule-id">{row['Rule ID']} &nbsp;({row['Level']})</div>
+              <div class="rule-title">{row['Title']}</div>
+              <div class="field-label">📄 Deskripsi</div>
+              <div class="field-value">{row['Description']}</div>
+              <div class="field-label">💡 Rasional</div>
+              <div class="field-value">{row['Rationale']}</div>
+              <div class="field-label">🔎 Audit</div>
+              <div class="field-value">{row['Audit']}</div>
+              <div class="field-label">🔧 Remediasi</div>
+              <div class="field-value">{row['Remediation']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with tab_chart:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown('<div class="section-head">Distribusi Level</div>', unsafe_allow_html=True)
+            # Membersihkan tampilan Level untuk chart (meringkas "Level 1 - Server" jadi "Level 1")
+            clean_levels = df["Level"].apply(lambda x: "Level 1" if "Level 1" in str(x) else ("Level 2" if "Level 2" in str(x) else x))
+            st.bar_chart(clean_levels.value_counts())
+        with c2:
+            st.markdown('<div class="section-head">Distribusi File</div>', unsafe_allow_html=True)
+            if "Source File" in df.columns:
+                st.bar_chart(df["Source File"].str[:25].value_counts())
+
     # ─── EXPORT CSV ─────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown('<div class="section-head">💾 Export ke CSV (Hemat Memori)</div>', unsafe_allow_html=True)
