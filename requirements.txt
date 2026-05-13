@@ -3,5 +3,4 @@ pymupdf
 polars
 pandas
 xlsxwriter
-openpyxl
 plotly
