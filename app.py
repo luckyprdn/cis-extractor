@@ -7,6 +7,9 @@ import io
 import os
 import time
 import plotly.express as px
+import plotly.graph_objects as go
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
 
 # --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
@@ -99,116 +102,126 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND UI (MULTI-UPLOAD & COMPARE MODE) ---
+# --- 3. FRONTEND UI (PREDATOR ULTIMATE DASHBOARD) ---
 def main():
     st.set_page_config(page_title="Predator Compare Pro", layout="wide", page_icon="🛡️")
     
+    # CSS Custom (Hanya UI, Tanpa Logic)
     st.markdown("""
         <style>
-        .stApp { background-color: #f4f7f9; }
-        .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e0e6ed; }
-        .stButton>button { border-radius: 8px; font-weight: bold; }
+        .stApp { background-color: #f0f2f6; }
+        .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+        .stTabs [data-baseweb="tab"] { background-color: #ffffff; padding: 10px 20px; border-radius: 5px 5px 0 0; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Predator Engine: Multi-Upload & Compare")
-    st.caption("IT Governance PNM - Benchmark Comparison Suite")
+    st.title("🛡️ Predator Engine: Ultimate Analysis")
+    st.markdown("---")
 
     with st.sidebar:
-        st.header("Control Center")
+        st.header("⚙️ Settings")
         st.success("Predator v8.7 Ready")
         st.divider()
-        st.info("Comparison Mode: Based on Rule Title")
-        if st.button("Clear Session"):
-            for key in st.session_state.keys():
-                del st.session_state[key]
+        st.markdown("### Visual Options")
+        show_wordcloud = st.toggle("Enable WordCloud Analysis", value=True)
+        st.divider()
+        if st.button("Reset Session", type="secondary"):
+            st.session_state.clear()
             st.rerun()
 
     # MULTI UPLOAD
-    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs (Bisa pilih banyak file)", type="pdf", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs (Multi-select)", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
-        if st.button("🚀 EXECUTE MULTI-SCAN & COMPARE", type="primary"):
+        if st.button("⚡ EXECUTE MULTI-SCAN & ANALYZE", type="primary", use_container_width=True):
             all_data = []
-            with st.status("Engine is hunting through multiple files...", expanded=True) as status:
+            with st.status("Engine is hunting...", expanded=True) as status:
                 for uploaded_file in uploaded_files:
-                    st.write(f"Scanning: {uploaded_file.name}...")
+                    st.write(f"Slicing: {uploaded_file.name}...")
                     file_bytes = uploaded_file.read()
                     extracted = predator_engine(file_bytes)
                     if extracted:
                         df_tmp = pd.DataFrame(extracted)
-                        df_tmp['Source_File'] = uploaded_file.name # Tag sumber file
+                        df_tmp['Source_File'] = uploaded_file.name
                         all_data.append(df_tmp)
                 
                 if all_data:
-                    master_df = pd.concat(all_data, ignore_index=True)
-                    st.session_state['master_data'] = master_df
-                    status.update(label="All targets neutralized!", state="complete")
+                    st.session_state['master_data'] = pd.concat(all_data, ignore_index=True)
+                    status.update(label="Scanning Complete!", state="complete")
                 else:
-                    st.error("No data extracted from the uploaded files.")
+                    st.error("No valid data found.")
 
     # --- ANALYSIS DASHBOARD ---
     if 'master_data' in st.session_state:
         df = st.session_state['master_data']
         total_files = df['Source_File'].nunique()
         
-        st.divider()
-        
-        # 1. Comparison Logic (Set Theory)
-        # Hitung berapa kali judul muncul di file yang berbeda
+        # LOGIK PERBANDINGAN (TIDAK MENGURANGI, HANYA MENAMBAH VIEW)
         title_counts = df.groupby('Title')['Source_File'].nunique().reset_index()
         title_counts.columns = ['Title', 'File_Count']
-        
-        # Merge back ke df utama
         df_analysis = df.merge(title_counts, on='Title')
         
-        # COMMON RULES: Muncul di SEMUA file yang di-upload
         common_df = df_analysis[df_analysis['File_Count'] == total_files].drop_duplicates(subset=['Title'])
-        
-        # SPECIFIC RULES: Cuma muncul di SATU file tertentu
         specific_df = df_analysis[df_analysis['File_Count'] == 1]
 
-        # UI Tabs
-        tab_sum, tab_common, tab_specific, tab_raw = st.tabs(["📊 Summary", "🔗 Common Rules", "🎯 Specific Rules", "📋 Raw Data"])
+        # TABS FRONTEND
+        tab_sum, tab_common, tab_specific, tab_compare, tab_cloud = st.tabs([
+            "📊 Summary Analytics", "🔗 Common Rules", "🎯 Specific Rules", "🔄 Side-by-Side", "☁️ WordCloud"
+        ])
 
         with tab_sum:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Files", total_files)
-            c2.metric("Common Rules (Global)", len(common_df))
-            c3.metric("Specific Rules (Unique)", len(specific_df))
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Files Analyzed", total_files)
+            col2.metric("Common Rules Found", len(common_df))
+            col3.metric("Specific Rules Found", len(specific_df))
             
-            st.write("### Rules Distribution per File")
+            st.write("### Rule Distribution per Source")
             dist_df = df.groupby('Source_File').size().reset_index(name='Rule Count')
-            fig = px.bar(dist_df, x='Source_File', y='Rule Count', color='Rule Count', text_auto=True)
+            fig = px.bar(dist_df, x='Source_File', y='Rule Count', color='Rule Count', 
+                         color_continuous_scale='Viridis', text_auto=True)
             st.plotly_chart(fig, use_container_width=True)
 
         with tab_common:
-            st.subheader(f"Rules found in ALL {total_files} files")
-            st.info("Aturan ini adalah standar umum yang ada di setiap benchmark yang lo upload.")
+            st.subheader("Standard Global Rules (Exist in all files)")
             st.dataframe(common_df[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
             
-            # Export Common
-            out_common = io.BytesIO()
-            common_df.to_excel(out_common, index=False)
-            st.download_button("📥 Download Common Rules", out_common.getvalue(), "common_rules.xlsx")
+            output_common = io.BytesIO()
+            common_df.to_excel(output_common, index=False)
+            st.download_button("📥 Export Common Rules", output_common.getvalue(), "common_rules.xlsx")
 
         with tab_specific:
-            st.subheader("Rules unique to specific files")
-            selected_file = st.selectbox("Filter Specific Rules by File:", options=df['Source_File'].unique())
-            file_spec_df = specific_df[specific_df['Source_File'] == selected_file]
-            
-            st.warning(f"Ditemukan {len(file_spec_df)} aturan yang HANYA ada di file ini.")
-            st.dataframe(file_spec_df[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
-            
-            # Export Specific
-            out_spec = io.BytesIO()
-            file_spec_df.to_excel(out_spec, index=False)
-            st.download_button(f"📥 Download Unique Rules for {selected_file[:20]}...", out_spec.getvalue(), "specific_rules.xlsx")
+            st.subheader("Unique Source Rules")
+            sel_file = st.selectbox("Select Source to View Specific Rules:", df['Source_File'].unique())
+            file_spec = specific_df[specific_df['Source_File'] == sel_file]
+            st.dataframe(file_spec[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
 
-        with tab_raw:
-            st.subheader("Combined Dataset")
-            st.dataframe(df, use_container_width=True)
+        with tab_compare:
+            st.subheader("Side-by-Side Comparison Viewer")
+            st.info("Bandingkan implementasi rules yang sama antar file.")
+            target_title = st.selectbox("Select Rule to Compare:", common_df['Title'].unique())
+            
+            compare_view = df[df['Title'] == target_title]
+            for idx, row in compare_view.iterrows():
+                with st.expander(f"📄 Source: {row['Source_File']}"):
+                    st.write(f"**ID:** {row['Rule ID']} | **Level:** {row['Level']}")
+                    st.write("**Audit Procedure:**")
+                    st.code(row['Audit'])
+                    st.write("**Remediation:**")
+                    st.code(row['Remediation'])
+
+        with tab_cloud:
+            if show_wordcloud:
+                st.subheader("Policy Theme Discovery")
+                text_blob = " ".join(df['Description'].astype(str))
+                wordcloud = WordCloud(width=800, height=400, background_color='white', 
+                                      colormap='viridis').generate(text_blob)
+                
+                fig_wc, ax_wc = plt.subplots(figsize=(10, 5))
+                ax_wc.imshow(wordcloud, interpolation='bilinear')
+                ax_wc.axis('off')
+                st.pyplot(fig_wc)
+                st.caption("Visualisasi ini ngebantu lo nemuin fokus security yang paling sering disebut di benchmark.")
 
 if __name__ == "__main__":
-    import pandas as pd
     main()
