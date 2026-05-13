@@ -10,7 +10,7 @@ import plotly.express as px
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - TIDAK DISENTUH) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - HARAM DISENTUH) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
@@ -101,7 +101,7 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. EXECUTIVE FRONTEND (FIXED & OPTIMIZED) ---
+# --- 3. EXECUTIVE FRONTEND (COMPARISON PRO EDITION) ---
 def main():
     st.set_page_config(page_title="Titan Predator Pro", layout="wide", page_icon="🛡️")
     
@@ -113,8 +113,8 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Predator Engine: Executive Analyzer")
-    st.caption("Intelligence Policy Extraction & Compliance Auditor for PNM IT Governance")
+    st.title("🛡️ Predator Engine: Ultimate Auditor")
+    st.caption("Intelligence Policy Comparison & Compliance Analytics for PNM IT Governance")
 
     with st.sidebar:
         st.header("🎛️ Control Panel")
@@ -127,7 +127,7 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs", type="pdf", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs (Single or Multiple)", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
         if st.button("🚀 EXECUTE PREDATOR SCAN", type="primary", width="stretch"):
@@ -162,13 +162,14 @@ def main():
 
         st.divider()
         
+        # KPI Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Rules", len(df))
         m2.metric("L1 Controls", len(df[df['Level'].str.contains('L1|Level 1', case=False, na=False)]))
         m3.metric("L2 Controls", len(df[df['Level'].str.contains('L2|Level 2', case=False, na=False)]))
         m4.metric("Engine Speed", f"{exec_t:.2f}s")
 
-        tab_viz, tab_compare, tab_explorer, tab_cloud = st.tabs(["📊 Analytics", "🔄 Comparison", "🔍 Data Explorer", "☁️ Themes"])
+        tab_viz, tab_compare, tab_explorer, tab_cloud = st.tabs(["📊 Analytics", "🔄 Comparison Pro", "🔍 Data Explorer", "☁️ Themes"])
 
         with tab_viz:
             c1, c2 = st.columns(2)
@@ -184,33 +185,51 @@ def main():
 
         with tab_compare:
             if df['Source'].nunique() > 1:
+                st.subheader("Benchmark Comparison Analysis")
+                # Set Theory Logic based on Title
                 t_counts = df.groupby('Title')['Source'].nunique().reset_index()
                 t_counts.columns = ['Title', 'File_Count']
                 df_c = df.merge(t_counts, on='Title')
+                
                 common = df_c[df_c['File_Count'] == df['Source'].nunique()].drop_duplicates('Title')
                 specific = df_c[df_c['File_Count'] == 1]
                 
                 cc1, cc2 = st.columns(2)
-                cc1.info(f"**Common Rules:** {len(common)}")
-                cc2.warning(f"**Specific Rules:** {len(specific)}")
-                sel_source = st.selectbox("Select File for unique rules:", df['Source'].unique())
-                st.dataframe(specific[specific['Source'] == sel_source][['Rule ID', 'Title', 'Level']])
+                cc1.info(f"**Common Rules:** {len(common)} (Found in all files)")
+                cc2.warning(f"**Specific Rules:** {len(specific)} (Unique per file)")
+                
+                # --- MENU BARU: COMMON VS SPECIFIC DETAILS ---
+                sub_tab_common, sub_tab_spec = st.tabs(["🔗 Common Rules Details", "🎯 Specific Rules Details"])
+                
+                with sub_tab_common:
+                    st.write("### Common Rules List")
+                    st.caption("Aturan-aturan di bawah ini muncul di seluruh dokumen yang lo upload.")
+                    st.dataframe(common[['Rule ID', 'Title', 'Level']], width="stretch")
+                    
+                    # Export Common
+                    out_common = io.BytesIO()
+                    common.to_excel(out_common, index=False)
+                    st.download_button("📥 Download Common Rules (Excel)", out_common.getvalue(), "common_rules.xlsx", width="stretch")
+
+                with sub_tab_spec:
+                    st.write("### Specific Rules Explorer")
+                    st.caption("Pilih file untuk melihat aturan yang hanya ada di dokumen tersebut.")
+                    sel_source = st.selectbox("Select File for unique rules:", df['Source'].unique())
+                    st.dataframe(specific[specific['Source'] == sel_source][['Rule ID', 'Title', 'Level']], width="stretch")
             else:
-                st.info("Upload >1 file for comparison.")
+                st.info("Upload lebih dari satu file untuk menggunakan fitur Comparison.")
 
         with tab_explorer:
-            query = st.text_input("Global Search:", "")
+            query = st.text_input("Global Search (Title, Audit, Remediation):", "")
             df_disp = df[df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)] if query else df
-            st.dataframe(df_disp)
+            st.dataframe(df_disp, width="stretch")
 
-            st.warning("⚠️ Excel memiliki batas 32,767 karakter per cell. Gunakan CSV jika data Audit/Remediation sangat panjang.")
+            st.warning("⚠️ Excel memiliki batas 32,767 karakter per cell. Gunakan CSV jika data terpotong.")
             
-            # Excel Buffer
             output_ex = io.BytesIO()
             with pd.ExcelWriter(output_ex, engine='xlsxwriter') as writer:
                 df_disp.to_excel(writer, index=False, sheet_name='Audit_Checklist')
             
-            # CSV Buffer (No character limit)
             output_csv = df_disp.to_csv(index=False).encode('utf-8')
 
             ex1, ex2 = st.columns(2)
