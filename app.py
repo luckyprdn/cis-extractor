@@ -2,12 +2,14 @@ import streamlit as st
 import fitz
 import polars as pl
 import pandas as pd
-import plotly.express as px
 import re
 import io
 import os
+import time
+import plotly.express as px
+import plotly.graph_objects as go
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - JANGAN DIGANGGU) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - HARAM DISENTUH) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
@@ -28,24 +30,20 @@ def clean_fast(text_list):
 
 # --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL) ---
 def predator_engine(pdf_stream):
-    # Support stream dari Streamlit uploader
     doc = fitz.open(stream=pdf_stream, filetype="pdf")
     total_pages = len(doc)
-    
-    all_pages_content = [] 
+    all_pages_content = []
     master_toc = {}
 
     for i in range(total_pages):
         page_text = doc[i].get_text("text")
         lines = [line.strip() for line in page_text.split('\n') if line.strip()]
         all_pages_content.append(lines)
-        
         if i < 25:
             for line in lines:
                 match = RE_TOC_LINE.search(line)
                 if match and "...." in line:
                     master_toc[match.group(1)] = {"page": int(match.group(3))}
-
     doc.close()
 
     all_ids = sorted(master_toc.keys(), key=lambda x: [int(i) for i in x.split('.')])
@@ -71,11 +69,9 @@ def predator_engine(pdf_stream):
                     rule_data["Title"].append(h_match.group(2))
                     found = True
                     continue
-                
                 if found and h_match and h_match.group(1) != rid:
                     if h_match.group(1) in master_toc:
                         break 
-                
                 if found:
                     s_match = RE_SECTION.match(line)
                     if s_match:
@@ -103,118 +99,143 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND UI (REVISED & CLEAN) ---
+# --- 3. FRONTEND UI (TITAN PRO DASHBOARD) ---
 def main():
-    st.set_page_config(page_title="Predator CIS Analyzer", layout="wide", page_icon="🛡️")
+    st.set_page_config(page_title="Predator CIS Pro", layout="wide", page_icon="🛡️")
     
-    # CSS Custom untuk tampilan Dark/Light yang konsisten
+    # Custom CSS for Dark Modern Look
     st.markdown("""
         <style>
-        .main { background-color: #f8f9fa; }
-        .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e0e6ed; }
-        .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-        .stTabs [data-baseweb="tab"] { height: 50px; font-weight: 600; }
+        .stApp { background: linear-gradient(to bottom, #0e1117, #1a1c24); color: #e0e6ed; }
+        .stMetric { background-color: #262730; padding: 20px; border-radius: 12px; border-left: 5px solid #00d4ff; }
+        .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+        .stTabs [data-baseweb="tab"] { 
+            background-color: #262730; border-radius: 5px 5px 0 0; padding: 10px 20px; color: white;
+        }
+        .stDataFrame { border: 1px solid #3d444d; border-radius: 10px; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Predator Engine: CIS Extractor")
-    st.markdown("---")
+    # Header with Logo Area
+    col_h1, col_h2 = st.columns([4, 1])
+    with col_h1:
+        st.title("🛡️ Predator Engine: CIS Pro Analyzer")
+        st.caption("Advanced Policy Extraction | High-Performance Slicing | IT Governance Ready")
+    with col_h2:
+        st.write("")
+        st.image("https://www.cisecurity.org/wp-content/uploads/2017/04/cis-logo.png", width=100)
 
+    # Sidebar Tools
     with st.sidebar:
-        st.header("⚙️ System Status")
-        st.success("Predator Engine v8.6 Active")
-        st.info("Mode: Memory-Resident Slicing")
+        st.header("⚡ Engine Control")
+        st.success("Core: Predator v8.6")
+        st.info("Status: Memory-Resident Ready")
         st.divider()
-        st.caption("Fokus pada akurasi ID dan pencegahan data bolong.")
+        st.markdown("### Filter Settings")
+        level_filter = st.multiselect("Control Level", ["Level 1", "Level 2"], default=["Level 1", "Level 2"])
+        st.divider()
+        st.caption("Fokus: Zero-Loss Extraction")
 
-    uploaded_file = st.file_uploader("Upload PDF CIS Benchmark", type="pdf")
+    # Upload Zone
+    uploaded_file = st.file_uploader("Drop CIS Benchmark PDF", type="pdf")
 
     if uploaded_file:
         file_bytes = uploaded_file.read()
         
-        if st.button("🚀 EXECUTE PREDATOR SCAN", type="primary", use_container_width=True):
-            with st.status("Engine is hunting for rules...", expanded=True) as status:
-                st.write("Caching pages to RAM...")
+        if st.button("🚀 INITIATE PREDATOR SCAN", type="primary", use_container_width=True):
+            start_time = time.time()
+            with st.status("Engine is hunting... 🎯", expanded=True) as status:
+                st.write("Reading PDF Structure...")
                 data = predator_engine(file_bytes)
                 
                 if data:
-                    status.update(label="Hunting Complete!", state="complete", expanded=False)
-                    # Convert ke Polars lalu ke Pandas untuk UI Streamlit
-                    df = pl.DataFrame(data).to_pandas()
-                    st.session_state['predator_df'] = df
+                    exec_time = time.time() - start_time
+                    status.update(label=f"Hunting Complete in {exec_time:.2f}s!", state="complete", expanded=False)
+                    st.session_state['data'] = pl.DataFrame(data).to_pandas()
+                    st.session_state['exec_time'] = exec_time
                 else:
                     status.update(label="Target Lost!", state="error")
-                    st.error("Gagal mendeteksi Daftar Isi. Pastikan PDF adalah CIS Benchmark asli.")
+                    st.error("Daftar Isi tidak terdeteksi.")
 
-    # --- HASIL SCAN ---
-    if 'predator_df' in st.session_state:
-        df = st.session_state['predator_df']
+    # --- RESULT AREA ---
+    if 'data' in st.session_state:
+        df = st.session_state['data']
         
-        # Dashboard Summary
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Rules Found", len(df))
-        
-        # Deteksi L1/L2
-        l1 = len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)])
-        l2 = len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)])
-        
-        col2.metric("Level 1 (Critical)", l1)
-        col3.metric("Level 2 (Defense)", l2)
-        col4.metric("Categories", df['Rule ID'].str.split('.').str[0].nunique())
+        # Filtering based on sidebar
+        if level_filter:
+            pattern = "|".join(level_filter)
+            df = df[df['Level'].str.contains(pattern, case=False, na=False)]
 
         st.divider()
 
-        # Tabs untuk navigasi
-        tab1, tab2, tab3 = st.tabs(["📊 Analytics", "🔍 Interactive Explorer", "📥 Export Results"])
+        # 1. KPI Metrics with Performance Timer
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Rules", len(df))
+        k2.metric("L1 Controls", len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)]))
+        k3.metric("L2 Controls", len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)]))
+        k4.metric("Exec Speed", f"{st.session_state['exec_time']:.2f}s")
+
+        # 2. Tabs for different views
+        tab1, tab2, tab3 = st.tabs(["📊 Audit Analytics", "🔍 Deep Explorer", "📥 Master Export"])
 
         with tab1:
-            c1, c2 = st.columns(2)
+            c1, c2 = st.columns([1, 1])
             with c1:
-                fig_pie = px.pie(df, names='Level', title='Controls by Level', hole=0.4)
+                # Sunburst or Pie
+                fig_pie = px.pie(df, names='Level', title='Control Level Distribution', hole=0.5,
+                                 color_discrete_sequence=px.colors.qualitative.Vivid)
                 st.plotly_chart(fig_pie, use_container_width=True)
             with c2:
+                # Category Bar
                 df['Cat'] = df['Rule ID'].str.split('.').str[0]
-                cat_data = df.groupby('Cat').size().reset_index(name='count')
-                fig_bar = px.bar(cat_data, x='Cat', y='count', title='Rules by Main Category', color='count')
+                cat_sum = df.groupby('Cat').size().reset_index(name='count')
+                fig_bar = px.bar(cat_sum, x='Cat', y='count', title='Rules by Category ID',
+                                 color='count', color_continuous_scale='Blues')
                 st.plotly_chart(fig_bar, use_container_width=True)
 
         with tab2:
-            st.markdown("### Searchable Ruleset")
-            search = st.text_input("Filter rules (ID, Title, Description, Audit...)", placeholder="Type 'password' or 'registry'...")
+            st.markdown("### Search & Filter Audit Procedures")
+            search = st.text_input("Global Search (misal: 'Firewall', 'Password', 'Account'):", placeholder="Cari di semua kolom...")
             
             if search:
-                # Filter global di semua kolom
                 mask = df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)
-                display_df = df[mask]
+                filtered_df = df[mask]
             else:
-                display_df = df
+                filtered_df = df
             
-            st.dataframe(display_df, use_container_width=True, height=500)
+            st.dataframe(filtered_df, use_container_width=True, height=500)
 
         with tab3:
-            st.markdown("### Download Data")
-            st.write("Ekspor hasil scan Predator Engine ke format yang lo butuhin.")
+            st.info("Ekspor hasil audit checklist ke format Excel (.xlsx) atau CSV.")
             
-            # Excel Buffer
+            final_df = filtered_df if 'filtered_df' in locals() else df
+            
+            # Export Logic (Memory Buffer)
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                display_df.to_excel(writer, index=False, sheet_name='CIS_Checklist')
-            
-            ex_col1, ex_col2 = st.columns(2)
-            with ex_col1:
+                final_df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
+                # Styling sheet
+                workbook = writer.book
+                worksheet = writer.sheets['Audit_Checklist']
+                header_fmt = workbook.add_format({'bold': True, 'bg_color': '#00d4ff', 'font_color': 'white'})
+                for col_num, value in enumerate(final_df.columns.values):
+                    worksheet.write(0, col_num, value, header_fmt)
+
+            ex1, ex2 = st.columns(2)
+            with ex1:
                 st.download_button(
-                    label="📥 Download Excel (.xlsx)",
+                    label="📥 DOWNLOAD EXCEL CHECKLIST",
                     data=output.getvalue(),
-                    file_name=f"PREDATOR_{uploaded_file.name.replace('.pdf', '.xlsx')}",
+                    file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-            with ex_col2:
-                csv = display_df.to_csv(index=False).encode('utf-8')
+            with ex2:
+                csv_data = final_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="📄 Download CSV (.csv)",
-                    data=csv,
-                    file_name=f"PREDATOR_{uploaded_file.name.replace('.pdf', '.csv')}",
+                    label="📄 DOWNLOAD CSV MASTER",
+                    data=csv_data,
+                    file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
