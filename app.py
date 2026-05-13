@@ -7,9 +7,6 @@ import io
 import os
 import time
 import plotly.express as px
-import plotly.graph_objects as go
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
 
 # --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
@@ -102,126 +99,129 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND UI (PREDATOR ULTIMATE DASHBOARD) ---
+# --- 3. FRONTEND UI (TITAN PRO MODE) ---
 def main():
-    st.set_page_config(page_title="Predator Compare Pro", layout="wide", page_icon="🛡️")
+    st.set_page_config(page_title="Predator CIS Pro Analyzer", layout="wide", page_icon="🛡️")
     
-    # CSS Custom (Hanya UI, Tanpa Logic)
     st.markdown("""
         <style>
-        .stApp { background-color: #f0f2f6; }
-        .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-        .stTabs [data-baseweb="tab"] { background-color: #ffffff; padding: 10px 20px; border-radius: 5px 5px 0 0; }
+        .stApp { background-color: #f8f9fa; }
+        .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border-left: 5px solid #00d4ff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .stButton>button { border-radius: 8px; font-weight: bold; height: 3em; background-color: #00d4ff; color: white; border: none; }
+        .stButton>button:hover { background-color: #00b8e6; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Predator Engine: Ultimate Analysis")
-    st.markdown("---")
+    st.title("🛡️ Predator Engine: CIS Pro Analyzer")
+    st.subheader("Enterprise-Grade Policy Extraction & Audit Intelligence")
 
     with st.sidebar:
-        st.header("⚙️ Settings")
-        st.success("Predator v8.7 Ready")
+        st.header("⚙️ Engine Control")
+        st.success("Core: Predator v8.7 Active")
+        st.info("PNM IT Governance Tool (RSP/ATI)")
         st.divider()
-        st.markdown("### Visual Options")
-        show_wordcloud = st.toggle("Enable WordCloud Analysis", value=True)
+        st.markdown("### 🔍 Global Filters")
+        # FITUR: Filter Berdasarkan Level
+        level_filter = st.multiselect("Filter by Level:", ["Level 1", "Level 2"], default=["Level 1", "Level 2"])
         st.divider()
-        if st.button("Reset Session", type="secondary"):
+        if st.button("Reset Session"):
             st.session_state.clear()
             st.rerun()
 
-    # MULTI UPLOAD
-    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs (Multi-select)", type="pdf", accept_multiple_files=True)
+    uploaded_file = st.file_uploader("Upload CIS Benchmark PDF", type="pdf")
 
-    if uploaded_files:
-        if st.button("⚡ EXECUTE MULTI-SCAN & ANALYZE", type="primary", use_container_width=True):
-            all_data = []
-            with st.status("Engine is hunting...", expanded=True) as status:
-                for uploaded_file in uploaded_files:
-                    st.write(f"Slicing: {uploaded_file.name}...")
-                    file_bytes = uploaded_file.read()
-                    extracted = predator_engine(file_bytes)
-                    if extracted:
-                        df_tmp = pd.DataFrame(extracted)
-                        df_tmp['Source_File'] = uploaded_file.name
-                        all_data.append(df_tmp)
+    if uploaded_file:
+        file_bytes = uploaded_file.read()
+        
+        if st.button("🚀 INITIATE PREDATOR SCAN", type="primary", use_container_width=True):
+            # FITUR: Execution Time Tracker
+            start_time = time.time()
+            with st.status("Engine is hunting for rules... 🎯", expanded=True) as status:
+                st.write("Caching Memory Blocks...")
+                data = predator_engine(file_bytes)
                 
-                if all_data:
-                    st.session_state['master_data'] = pd.concat(all_data, ignore_index=True)
-                    status.update(label="Scanning Complete!", state="complete")
+                if data:
+                    exec_time = time.time() - start_time
+                    status.update(label=f"Hunting Complete in {exec_time:.2f}s!", state="complete", expanded=False)
+                    # Simpan data & timer ke session
+                    st.session_state['master_data'] = pd.DataFrame(data)
+                    st.session_state['exec_time'] = exec_time
                 else:
-                    st.error("No valid data found.")
+                    status.update(label="Target Lost!", state="error")
+                    st.error("Daftar Isi tidak terdeteksi. Gunakan PDF CIS Benchmark asli.")
 
-    # --- ANALYSIS DASHBOARD ---
+    # --- DASHBOARD & ANALYTICS AREA ---
     if 'master_data' in st.session_state:
         df = st.session_state['master_data']
-        total_files = df['Source_File'].nunique()
         
-        # LOGIK PERBANDINGAN (TIDAK MENGURANGI, HANYA MENAMBAH VIEW)
-        title_counts = df.groupby('Title')['Source_File'].nunique().reset_index()
-        title_counts.columns = ['Title', 'File_Count']
-        df_analysis = df.merge(title_counts, on='Title')
+        # Apply Sidebar Filters
+        if level_filter:
+            pattern = "|".join(level_filter)
+            df = df[df['Level'].str.contains(pattern, case=False, na=False)]
+
+        st.divider()
         
-        common_df = df_analysis[df_analysis['File_Count'] == total_files].drop_duplicates(subset=['Title'])
-        specific_df = df_analysis[df_analysis['File_Count'] == 1]
+        # 1. KPI Metrics (Eye-catching)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Rules Found", len(df))
+        k2.metric("Level 1 Controls", len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)]))
+        k3.metric("Level 2 Controls", len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)]))
+        k4.metric("Engine Execution Speed", f"{st.session_state['exec_time']:.2f}s")
 
-        # TABS FRONTEND
-        tab_sum, tab_common, tab_specific, tab_compare, tab_cloud = st.tabs([
-            "📊 Summary Analytics", "🔗 Common Rules", "🎯 Specific Rules", "🔄 Side-by-Side", "☁️ WordCloud"
-        ])
+        # 2. Tabs for Organization
+        tab_dash, tab_explorer, tab_export = st.tabs(["📊 Audit Analytics", "🔍 Searchable Database", "📥 Professional Export"])
 
-        with tab_sum:
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Files Analyzed", total_files)
-            col2.metric("Common Rules Found", len(common_df))
-            col3.metric("Specific Rules Found", len(specific_df))
+        with tab_dash:
+            c1, c2 = st.columns(2)
+            with c1:
+                # Distribution Pie Chart
+                fig_pie = px.pie(df, names='Level', title='Control Level Distribution', hole=0.4,
+                                 color_discrete_sequence=px.colors.qualitative.Pastel)
+                st.plotly_chart(fig_pie, use_container_width=True)
+            with c2:
+                # Categories Bar Chart
+                df['Category'] = df['Rule ID'].str.split('.').str[0]
+                cat_summary = df.groupby('Category').size().reset_index(name='Rules')
+                fig_bar = px.bar(cat_summary, x='Category', y='Rules', title='Rules by Main Category ID',
+                                 color='Rules', color_continuous_scale='Teals')
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+        with tab_explorer:
+            st.markdown("### Interactive Global Search")
+            # FITUR: Filter Search Real-time
+            search_query = st.text_input("Cari di seluruh kolom (ID, Title, Audit Procedure, dll):", "")
             
-            st.write("### Rule Distribution per Source")
-            dist_df = df.groupby('Source_File').size().reset_index(name='Rule Count')
-            fig = px.bar(dist_df, x='Source_File', y='Rule Count', color='Rule Count', 
-                         color_continuous_scale='Viridis', text_auto=True)
-            st.plotly_chart(fig, use_container_width=True)
+            if search_query:
+                filtered_df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)]
+            else:
+                filtered_df = df
 
-        with tab_common:
-            st.subheader("Standard Global Rules (Exist in all files)")
-            st.dataframe(common_df[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
+            st.dataframe(filtered_df, use_container_width=True, height=500)
+
+        with tab_export:
+            st.info("Export hasil audit dalam format profesional untuk pelaporan internal.")
             
-            output_common = io.BytesIO()
-            common_df.to_excel(output_common, index=False)
-            st.download_button("📥 Export Common Rules", output_common.getvalue(), "common_rules.xlsx")
-
-        with tab_specific:
-            st.subheader("Unique Source Rules")
-            sel_file = st.selectbox("Select Source to View Specific Rules:", df['Source_File'].unique())
-            file_spec = specific_df[specific_df['Source_File'] == sel_file]
-            st.dataframe(file_spec[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
-
-        with tab_compare:
-            st.subheader("Side-by-Side Comparison Viewer")
-            st.info("Bandingkan implementasi rules yang sama antar file.")
-            target_title = st.selectbox("Select Rule to Compare:", common_df['Title'].unique())
-            
-            compare_view = df[df['Title'] == target_title]
-            for idx, row in compare_view.iterrows():
-                with st.expander(f"📄 Source: {row['Source_File']}"):
-                    st.write(f"**ID:** {row['Rule ID']} | **Level:** {row['Level']}")
-                    st.write("**Audit Procedure:**")
-                    st.code(row['Audit'])
-                    st.write("**Remediation:**")
-                    st.code(row['Remediation'])
-
-        with tab_cloud:
-            if show_wordcloud:
-                st.subheader("Policy Theme Discovery")
-                text_blob = " ".join(df['Description'].astype(str))
-                wordcloud = WordCloud(width=800, height=400, background_color='white', 
-                                      colormap='viridis').generate(text_blob)
+            # Excel Logic (XlsxWriter)
+            excel_out = io.BytesIO()
+            with pd.ExcelWriter(excel_out, engine='xlsxwriter') as writer:
+                # Gunakan data yang sedang difilter/dicari jika ada
+                target_df = filtered_df if 'filtered_df' in locals() else df
+                target_df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
                 
-                fig_wc, ax_wc = plt.subplots(figsize=(10, 5))
-                ax_wc.imshow(wordcloud, interpolation='bilinear')
-                ax_wc.axis('off')
-                st.pyplot(fig_wc)
-                st.caption("Visualisasi ini ngebantu lo nemuin fokus security yang paling sering disebut di benchmark.")
+                # Pro Header Styling
+                workbook = writer.book
+                worksheet = writer.sheets['Audit_Checklist']
+                header_fmt = workbook.add_format({'bold': True, 'bg_color': '#00d4ff', 'font_color': 'white', 'border': 1})
+                for col_num, value in enumerate(target_df.columns.values):
+                    worksheet.write(0, col_num, value, header_fmt)
+
+            st.download_button(
+                label="📥 DOWNLOAD MASTER EXCEL (.xlsx)",
+                data=excel_out.getvalue(),
+                file_name=f"TITAN_AUDIT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
 if __name__ == "__main__":
     main()
