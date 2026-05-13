@@ -8,8 +8,9 @@ import os
 import time
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - HARAM DISENTUH) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
@@ -99,144 +100,167 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND UI (TITAN PRO DASHBOARD) ---
+# --- 3. FRONTEND TITAN DASHBOARD PRO ---
 def main():
-    st.set_page_config(page_title="Predator CIS Pro", layout="wide", page_icon="🛡️")
-    
-    # Custom CSS for Dark Modern Look
+    st.set_page_config(page_title="Titan Predator | IT Governance PNM", layout="wide", page_icon="🛡️")
+
+    # Dark Mode Custom Styling
     st.markdown("""
         <style>
-        .stApp { background: linear-gradient(to bottom, #0e1117, #1a1c24); color: #e0e6ed; }
-        .stMetric { background-color: #262730; padding: 20px; border-radius: 12px; border-left: 5px solid #00d4ff; }
-        .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-        .stTabs [data-baseweb="tab"] { 
-            background-color: #262730; border-radius: 5px 5px 0 0; padding: 10px 20px; color: white;
-        }
-        .stDataFrame { border: 1px solid #3d444d; border-radius: 10px; }
+        .stApp { background-color: #0e1117; color: #ffffff; }
+        [data-testid="stMetricValue"] { font-size: 28px; color: #00d4ff; }
+        .stButton>button { border-radius: 20px; background-color: #00d4ff; color: black; font-weight: bold; border: none; }
+        .stButton>button:hover { background-color: #00b8e6; color: white; }
+        .css-1r6slb0 { background-color: #1a1c24; border-radius: 15px; padding: 20px; border: 1px solid #3d444d; }
+        .stTabs [data-baseweb="tab"] { color: #a1a1a1; }
+        .stTabs [aria-selected="true"] { color: #00d4ff !important; border-bottom-color: #00d4ff !important; }
         </style>
     """, unsafe_allow_html=True)
 
-    # Header with Logo Area
-    col_h1, col_h2 = st.columns([4, 1])
-    with col_h1:
-        st.title("🛡️ Predator Engine: CIS Pro Analyzer")
-        st.caption("Advanced Policy Extraction | High-Performance Slicing | IT Governance Ready")
-    with col_h2:
-        st.write("")
-        st.image("https://www.cisecurity.org/wp-content/uploads/2017/04/cis-logo.png", width=100)
-
-    # Sidebar Tools
+    # Sidebar Pro
     with st.sidebar:
-        st.header("⚡ Engine Control")
-        st.success("Core: Predator v8.6")
-        st.info("Status: Memory-Resident Ready")
+        st.title("🛡️ Titan Predator")
+        st.markdown("`Version 9.5-PRO`")
         st.divider()
-        st.markdown("### Filter Settings")
-        level_filter = st.multiselect("Control Level", ["Level 1", "Level 2"], default=["Level 1", "Level 2"])
+        st.header("Admin IT Gov")
+        st.info(f"User: Lucky Pradana\nDept: RSP / ATI PNM")
         st.divider()
-        st.caption("Fokus: Zero-Loss Extraction")
+        st.caption("Engine: Predator v8.6 (Original Logic)")
+        st.caption(f"Last Sync: {datetime.now().strftime('%H:%M:%S')}")
 
-    # Upload Zone
-    uploaded_file = st.file_uploader("Drop CIS Benchmark PDF", type="pdf")
+    # Hero Section
+    c_head1, c_head2 = st.columns([3, 1])
+    with c_head1:
+        st.title("CIS Benchmark Policy Extractor")
+        st.write("Transform standard PDF benchmarks into actionable IT Governance datasets.")
+    with c_head2:
+        st.write("")
+        # Placeholder for PNM or IT Gov Logo
+        st.image("https://www.cisecurity.org/wp-content/uploads/2017/04/cis-logo.png", width=120)
+
+    # File Uploader with Container
+    with st.container():
+        st.subheader("📁 Upload Center")
+        uploaded_file = st.file_uploader("Drop your CIS Benchmark PDF (Windows/Debian/Ubuntu)", type="pdf")
 
     if uploaded_file:
         file_bytes = uploaded_file.read()
         
-        if st.button("🚀 INITIATE PREDATOR SCAN", type="primary", use_container_width=True):
+        # Action Button
+        if st.button("🚀 INITIATE PREDATOR ENGINE", use_container_width=True):
             start_time = time.time()
             with st.status("Engine is hunting... 🎯", expanded=True) as status:
-                st.write("Reading PDF Structure...")
+                st.write("Mapping Memory Blocks...")
                 data = predator_engine(file_bytes)
                 
                 if data:
                     exec_time = time.time() - start_time
-                    status.update(label=f"Hunting Complete in {exec_time:.2f}s!", state="complete", expanded=False)
-                    st.session_state['data'] = pl.DataFrame(data).to_pandas()
+                    st.session_state['data'] = pd.DataFrame(data)
                     st.session_state['exec_time'] = exec_time
+                    status.update(label=f"Hunting Complete in {exec_time:.2f}s!", state="complete", expanded=False)
                 else:
                     status.update(label="Target Lost!", state="error")
-                    st.error("Daftar Isi tidak terdeteksi.")
+                    st.error("Table of Contents not found. Ensure this is an official CIS PDF.")
 
-    # --- RESULT AREA ---
+    # --- DASHBOARD VIEW ---
     if 'data' in st.session_state:
         df = st.session_state['data']
         
-        # Filtering based on sidebar
-        if level_filter:
-            pattern = "|".join(level_filter)
-            df = df[df['Level'].str.contains(pattern, case=False, na=False)]
-
         st.divider()
+        
+        # EXECUTIVE SUMMARY CARDS
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            st.metric("Total Rules Extracted", len(df))
+        with col_m2:
+            l1_count = len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)])
+            st.metric("L1 (Critical Controls)", l1_count)
+        with col_m3:
+            l2_count = len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)])
+            st.metric("L2 (Defense in Depth)", l2_count)
+        with col_m4:
+            st.metric("Processing Speed", f"{st.session_state['exec_time']:.2f}s")
 
-        # 1. KPI Metrics with Performance Timer
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Rules", len(df))
-        k2.metric("L1 Controls", len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)]))
-        k3.metric("L2 Controls", len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)]))
-        k4.metric("Exec Speed", f"{st.session_state['exec_time']:.2f}s")
+        # TABBED ANALYTICS
+        tab_viz, tab_data, tab_export = st.tabs(["📊 Audit Analytics", "🔍 Interactive Explorer", "📥 Multi-Format Export"])
 
-        # 2. Tabs for different views
-        tab1, tab2, tab3 = st.tabs(["📊 Audit Analytics", "🔍 Deep Explorer", "📥 Master Export"])
-
-        with tab1:
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                # Sunburst or Pie
-                fig_pie = px.pie(df, names='Level', title='Control Level Distribution', hole=0.5,
-                                 color_discrete_sequence=px.colors.qualitative.Vivid)
+        with tab_viz:
+            st.subheader("Compliance Distribution Heatmap")
+            v_col1, v_col2 = st.columns(2)
+            
+            with v_col1:
+                # Distribution of Levels
+                fig_pie = px.pie(df, names='Level', hole=0.6, 
+                                 title='Security Hardening Levels',
+                                 color_discrete_sequence=px.colors.sequential.Cyan_r)
+                fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='white')
                 st.plotly_chart(fig_pie, use_container_width=True)
-            with c2:
-                # Category Bar
-                df['Cat'] = df['Rule ID'].str.split('.').str[0]
-                cat_sum = df.groupby('Cat').size().reset_index(name='count')
-                fig_bar = px.bar(cat_sum, x='Cat', y='count', title='Rules by Category ID',
-                                 color='count', color_continuous_scale='Blues')
+            
+            with v_col2:
+                # Controls by Category (Rule ID digit 1)
+                df['Category'] = df['Rule ID'].str.split('.').str[0]
+                cat_count = df.groupby('Category').size().reset_index(name='Rules')
+                fig_bar = px.bar(cat_count, x='Category', y='Rules', title='Rules Volume by Section',
+                                 color='Rules', color_continuous_scale='Blues')
+                fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='white')
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-        with tab2:
-            st.markdown("### Search & Filter Audit Procedures")
-            search = st.text_input("Global Search (misal: 'Firewall', 'Password', 'Account'):", placeholder="Cari di semua kolom...")
+        with tab_data:
+            st.subheader("Global Policy Database")
+            search = st.text_input("Quick Search (e.g. 'Password', 'Encryption', 'Admin')", "")
             
             if search:
                 mask = df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)
-                filtered_df = df[mask]
+                display_df = df[mask]
             else:
-                filtered_df = df
+                display_df = df
             
-            st.dataframe(filtered_df, use_container_width=True, height=500)
+            st.dataframe(display_df, use_container_width=True, height=500)
 
-        with tab3:
-            st.info("Ekspor hasil audit checklist ke format Excel (.xlsx) atau CSV.")
+        with tab_export:
+            st.subheader("Final Audit Reporting")
+            st.write("Ekspor hasil audit ke format profesional untuk checklist internal PNM.")
             
-            final_df = filtered_df if 'filtered_df' in locals() else df
-            
-            # Export Logic (Memory Buffer)
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                final_df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
-                # Styling sheet
+            # EXCEL EXPORT (High Speed Engine)
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
                 workbook = writer.book
                 worksheet = writer.sheets['Audit_Checklist']
-                header_fmt = workbook.add_format({'bold': True, 'bg_color': '#00d4ff', 'font_color': 'white'})
-                for col_num, value in enumerate(final_df.columns.values):
-                    worksheet.write(0, col_num, value, header_fmt)
-
-            ex1, ex2 = st.columns(2)
-            with ex1:
+                
+                # Pro Header Styling
+                header_format = workbook.add_format({
+                    'bold': True, 'bg_color': '#00d4ff', 'color': 'black', 'border': 1
+                })
+                for col_num, value in enumerate(df.columns.values):
+                    worksheet.write(0, col_num, value, header_format)
+            
+            e_col1, e_col2, e_col3 = st.columns(3)
+            with e_col1:
                 st.download_button(
-                    label="📥 DOWNLOAD EXCEL CHECKLIST",
-                    data=output.getvalue(),
-                    file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    label="📥 DOWNLOAD EXCEL (.xlsx)",
+                    data=excel_buffer.getvalue(),
+                    file_name=f"TITAN_AUDIT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
+                    mime="application/vnd.ms-excel",
                     use_container_width=True
                 )
-            with ex2:
-                csv_data = final_df.to_csv(index=False).encode('utf-8')
+            with e_col2:
+                csv_data = df.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="📄 DOWNLOAD CSV MASTER",
+                    label="📄 DOWNLOAD CSV (.csv)",
                     data=csv_data,
-                    file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.csv",
+                    file_name=f"TITAN_AUDIT_{uploaded_file.name.replace('.pdf', '')}.csv",
                     mime="text/csv",
+                    use_container_width=True
+                )
+            with e_col3:
+                # JSON buat integrasi backend lain
+                json_data = df.to_json(orient='records')
+                st.download_button(
+                    label="💻 DOWNLOAD JSON (.json)",
+                    data=json_data,
+                    file_name=f"TITAN_AUDIT_{uploaded_file.name.replace('.pdf', '')}.json",
+                    mime="application/json",
                     use_container_width=True
                 )
 
