@@ -2,12 +2,12 @@ import streamlit as st
 import fitz
 import polars as pl
 import pandas as pd
+import plotly.express as px
 import re
 import io
 import os
-import plotly.express as px
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - HARAM DISENTUH) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - JANGAN DIGANGGU) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
@@ -28,20 +28,24 @@ def clean_fast(text_list):
 
 # --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL) ---
 def predator_engine(pdf_stream):
+    # Support stream dari Streamlit uploader
     doc = fitz.open(stream=pdf_stream, filetype="pdf")
     total_pages = len(doc)
-    all_pages_content = []
+    
+    all_pages_content = [] 
     master_toc = {}
 
     for i in range(total_pages):
         page_text = doc[i].get_text("text")
         lines = [line.strip() for line in page_text.split('\n') if line.strip()]
         all_pages_content.append(lines)
+        
         if i < 25:
             for line in lines:
                 match = RE_TOC_LINE.search(line)
                 if match and "...." in line:
                     master_toc[match.group(1)] = {"page": int(match.group(3))}
+
     doc.close()
 
     all_ids = sorted(master_toc.keys(), key=lambda x: [int(i) for i in x.split('.')])
@@ -67,9 +71,11 @@ def predator_engine(pdf_stream):
                     rule_data["Title"].append(h_match.group(2))
                     found = True
                     continue
+                
                 if found and h_match and h_match.group(1) != rid:
                     if h_match.group(1) in master_toc:
                         break 
+                
                 if found:
                     s_match = RE_SECTION.match(line)
                     if s_match:
@@ -97,130 +103,121 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND UI (REVISED ENTERPRISE LOOK) ---
+# --- 3. FRONTEND UI (REVISED & CLEAN) ---
 def main():
     st.set_page_config(page_title="Predator CIS Analyzer", layout="wide", page_icon="🛡️")
     
-    # Injection CSS untuk merapikan visual
+    # CSS Custom untuk tampilan Dark/Light yang konsisten
     st.markdown("""
         <style>
-        .stApp { background-color: #f4f7f9; }
+        .main { background-color: #f8f9fa; }
         .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e0e6ed; }
-        .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
-        div[data-testid="stExpander"] { background-color: #ffffff; border-radius: 10px; }
+        .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+        .stTabs [data-baseweb="tab"] { height: 50px; font-weight: 600; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Predator Engine: CIS Benchmark Extractor")
-    st.markdown("Automated Policy Extraction & Audit Intelligence")
+    st.title("🛡️ Predator Engine: CIS Extractor")
+    st.markdown("---")
 
-    # --- SIDEBAR ---
     with st.sidebar:
-        st.image("https://www.cisecurity.org/wp-content/uploads/2017/04/cis-logo.png", width=150)
-        st.header("Control Center")
-        st.info("Predator Engine v8.6 Active\nMode: High-Performance")
-        
-        # User Manual
-        with st.expander("📖 Quick Guide"):
-            st.caption("1. Upload PDF CIS asli\n2. Klik 'Run Predator'\n3. Filter & Download Hasil")
-        
+        st.header("⚙️ System Status")
+        st.success("Predator Engine v8.6 Active")
+        st.info("Mode: Memory-Resident Slicing")
         st.divider()
-        st.caption("PNM IT Governance Optimization Tool")
+        st.caption("Fokus pada akurasi ID dan pencegahan data bolong.")
 
-    # --- UPLOAD SECTION ---
-    upload_col, info_col = st.columns([2, 1])
-    with upload_col:
-        uploaded_file = st.file_uploader("Drop PDF Benchmark here", type="pdf")
-    with info_col:
-        if uploaded_file:
-            st.success(f"**File Loaded:**\n{uploaded_file.name}")
-        else:
-            st.warning("Awaiting PDF upload...")
+    uploaded_file = st.file_uploader("Upload PDF CIS Benchmark", type="pdf")
 
     if uploaded_file:
         file_bytes = uploaded_file.read()
         
-        if st.button("🚀 RUN PREDATOR ENGINE", type="primary"):
-            with st.status("Engine is hunting... 🎯", expanded=True) as status:
-                st.write("Extracting and Slicing Pages...")
+        if st.button("🚀 EXECUTE PREDATOR SCAN", type="primary", use_container_width=True):
+            with st.status("Engine is hunting for rules...", expanded=True) as status:
+                st.write("Caching pages to RAM...")
                 data = predator_engine(file_bytes)
                 
                 if data:
                     status.update(label="Hunting Complete!", state="complete", expanded=False)
-                    st.session_state['predator_data'] = pl.DataFrame(data).to_pandas()
+                    # Convert ke Polars lalu ke Pandas untuk UI Streamlit
+                    df = pl.DataFrame(data).to_pandas()
+                    st.session_state['predator_df'] = df
                 else:
                     status.update(label="Target Lost!", state="error")
-                    st.error("Daftar Isi tidak ditemukan. Pastikan PDF adalah CIS Benchmark asli.")
+                    st.error("Gagal mendeteksi Daftar Isi. Pastikan PDF adalah CIS Benchmark asli.")
 
-    # --- RESULT DASHBOARD ---
-    if 'predator_data' in st.session_state:
-        df = st.session_state['predator_data']
+    # --- HASIL SCAN ---
+    if 'predator_df' in st.session_state:
+        df = st.session_state['predator_df']
         
-        # 1. KPI Metrics
+        # Dashboard Summary
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Rules Found", len(df))
+        
+        # Deteksi L1/L2
+        l1 = len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)])
+        l2 = len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)])
+        
+        col2.metric("Level 1 (Critical)", l1)
+        col3.metric("Level 2 (Defense)", l2)
+        col4.metric("Categories", df['Rule ID'].str.split('.').str[0].nunique())
+
         st.divider()
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Total Controls", len(df))
-        
-        # Penanganan L1/L2 lebih dinamis
-        l1_count = len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)])
-        l2_count = len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)])
-        
-        kpi2.metric("L1 Controls", l1_count)
-        kpi3.metric("L2 Controls", l2_count)
-        kpi4.metric("Categories", df['Rule ID'].str.split('.').str[0].nunique())
 
-        # 2. Tabs untuk Organisasi Data
-        tab_dash, tab_table, tab_export = st.tabs(["📊 Analytics", "🔍 Data Explorer", "📥 Export Master"])
+        # Tabs untuk navigasi
+        tab1, tab2, tab3 = st.tabs(["📊 Analytics", "🔍 Interactive Explorer", "📥 Export Results"])
 
-        with tab_dash:
+        with tab1:
             c1, c2 = st.columns(2)
             with c1:
-                # Pie Chart Level
-                fig_pie = px.pie(df, names='Level', title='Control Level Distribution', 
-                                 hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_pie = px.pie(df, names='Level', title='Controls by Level', hole=0.4)
                 st.plotly_chart(fig_pie, use_container_width=True)
             with c2:
-                # Bar Chart Category
                 df['Cat'] = df['Rule ID'].str.split('.').str[0]
-                cat_summary = df.groupby('Cat').size().reset_index(name='Count')
-                fig_bar = px.bar(cat_summary, x='Cat', y='Count', title='Controls by Main Category',
-                                 labels={'Cat': 'Rule Category'}, color='Count', color_continuous_scale='Teals')
+                cat_data = df.groupby('Cat').size().reset_index(name='count')
+                fig_bar = px.bar(cat_data, x='Cat', y='count', title='Rules by Main Category', color='count')
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-        with tab_table:
+        with tab2:
             st.markdown("### Searchable Ruleset")
-            query = st.text_input("Global Search (ID, Title, Audit Procedure, etc):", placeholder="e.g. Password")
+            search = st.text_input("Filter rules (ID, Title, Description, Audit...)", placeholder="Type 'password' or 'registry'...")
             
-            if query:
-                mask = df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)
-                filtered_df = df[mask]
+            if search:
+                # Filter global di semua kolom
+                mask = df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)
+                display_df = df[mask]
             else:
-                filtered_df = df
+                display_df = df
             
-            st.dataframe(filtered_df, use_container_width=True, height=500)
+            st.dataframe(display_df, use_container_width=True, height=500)
 
-        with tab_export:
-            st.info("Export hasil ekstraksi ke format Excel untuk kebutuhan Audit Checklist.")
+        with tab3:
+            st.markdown("### Download Data")
+            st.write("Ekspor hasil scan Predator Engine ke format yang lo butuhin.")
             
-            # Export Logic
+            # Excel Buffer
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # Pakai dataframe yang terfilter search jika ada
-                target_df = filtered_df if query else df
-                target_df.to_excel(writer, index=False, sheet_name='CIS_Master_Checklist')
-                
-                # Auto-adjust column width (Basic)
-                worksheet = writer.sheets['CIS_Master_Checklist']
-                for idx, col in enumerate(target_df.columns):
-                    worksheet.set_column(idx, idx, 20)
-
-            st.download_button(
-                label="📥 DOWNLOAD MASTER EXCEL",
-                data=output.getvalue(),
-                file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+                display_df.to_excel(writer, index=False, sheet_name='CIS_Checklist')
+            
+            ex_col1, ex_col2 = st.columns(2)
+            with ex_col1:
+                st.download_button(
+                    label="📥 Download Excel (.xlsx)",
+                    data=output.getvalue(),
+                    file_name=f"PREDATOR_{uploaded_file.name.replace('.pdf', '.xlsx')}",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            with ex_col2:
+                csv = display_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📄 Download CSV (.csv)",
+                    data=csv,
+                    file_name=f"PREDATOR_{uploaded_file.name.replace('.pdf', '.csv')}",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
 if __name__ == "__main__":
     main()
