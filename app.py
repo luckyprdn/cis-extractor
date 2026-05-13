@@ -7,9 +7,8 @@ import io
 import os
 import time
 import plotly.express as px
-from datetime import datetime
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - TIDAK DISENTUH) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
@@ -22,13 +21,19 @@ SECTION_MAP = {
     "references": "References"
 }
 
+# --- UPDATE FILTER: ANTI-DUPLIKAT ---
 def clean_fast(text_list):
     if not text_list: return "N/A"
-    full = " ".join(text_list)
+    
+    # Buang whitespace, buang string kosong, dan BUANG DUPLIKAT (Penting buat kolom Level)
+    # Pakai dict.fromkeys untuk menjaga urutan teks asli
+    unique_items = list(dict.fromkeys([t.strip() for t in text_list if t.strip()]))
+    
+    full = " ".join(unique_items)
     full = RE_CLEAN.sub('', full)
     return " ".join(full.split()).strip() or "N/A"
 
-# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL) ---
+# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - TETAP UNTOUCHED) ---
 def predator_engine(pdf_stream):
     doc = fitz.open(stream=pdf_stream, filetype="pdf")
     total_pages = len(doc)
@@ -99,134 +104,91 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND TITAN DASHBOARD ---
+# --- 3. FRONTEND UI ---
 def main():
-    st.set_page_config(page_title="Titan Predator Extractor", layout="wide", page_icon="🛡️")
-
-    # Styling UI Pro
+    st.set_page_config(page_title="Predator CIS Analyzer", layout="wide", page_icon="🛡️")
+    
     st.markdown("""
         <style>
-        .stApp { background-color: #0e1117; color: #ffffff; }
-        [data-testid="stMetricValue"] { font-size: 32px; color: #00d4ff; font-weight: bold; }
-        .stButton>button { border-radius: 10px; background-color: #00d4ff; color: #000000; font-weight: bold; border: none; height: 3em; }
-        .stButton>button:hover { background-color: #00b8e6; color: #ffffff; }
-        .stTabs [data-baseweb="tab-list"] { gap: 20px; }
-        .stTabs [data-baseweb="tab"] { color: #808495; }
-        .stTabs [aria-selected="true"] { color: #00d4ff !important; border-bottom-color: #00d4ff !important; }
+        .stApp { background-color: #f4f7f9; }
+        .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e0e6ed; }
+        .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; }
         </style>
     """, unsafe_allow_html=True)
 
-    # Hero Section
-    c1, c2 = st.columns([4, 1])
-    with c1:
-        st.title("🛡️ Titan Predator Pro")
-        st.caption("Intelligence Policy Extraction Engine | PNM IT Governance")
-    with c2:
-        st.image("https://www.cisecurity.org/wp-content/uploads/2017/04/cis-logo.png", width=90)
+    st.title("🛡️ Predator Engine: CIS Pro Analyzer")
+    st.caption("IT Governance & Policy Optimization Tool")
 
-    st.divider()
+    with st.sidebar:
+        st.header("Control Center")
+        st.success("Predator v8.7 Ready")
+        st.info("Anti-Duplicate Level Filter Enabled")
+        st.divider()
+        st.caption("PNM IT Audit Intelligence")
 
     uploaded_file = st.file_uploader("Upload CIS Benchmark PDF", type="pdf")
 
     if uploaded_file:
         file_bytes = uploaded_file.read()
         
-        if st.button("🚀 EXECUTE PREDATOR SCAN", use_container_width=True):
-            start_t = time.time()
+        if st.button("🚀 RUN PREDATOR ENGINE", type="primary"):
+            start_time = time.time()
             with st.status("Engine is hunting... 🎯", expanded=True) as status:
-                st.write("Processing Memory Blocks...")
                 data = predator_engine(file_bytes)
-                
                 if data:
-                    exec_t = time.time() - start_t
-                    st.session_state['data'] = pd.DataFrame(data)
-                    st.session_state['exec_time'] = exec_t
-                    status.update(label=f"Hunting Complete in {exec_t:.2f}s!", state="complete", expanded=False)
+                    exec_time = time.time() - start_time
+                    status.update(label=f"Hunting Complete in {exec_time:.2f}s!", state="complete", expanded=False)
+                    st.session_state['data'] = pl.DataFrame(data).to_pandas()
                 else:
                     status.update(label="Target Lost!", state="error")
-                    st.error("Gagal mendeteksi Daftar Isi.")
+                    st.error("Daftar Isi tidak ditemukan.")
 
-    # --- DASHBOARD VIEW ---
     if 'data' in st.session_state:
         df = st.session_state['data']
         
-        # Row 1: Executive Metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Rules", len(df))
+        st.divider()
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Rules", len(df))
+        
         l1 = len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)])
-        m2.metric("L1 (Critical)", l1)
         l2 = len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)])
-        m3.metric("L2 (Defense)", l2)
-        m4.metric("Engine Speed", f"{st.session_state['exec_time']:.2f}s")
+        
+        k2.metric("L1 Controls", l1)
+        k3.metric("L2 Controls", l2)
+        k4.metric("Sections", df['Rule ID'].str.split('.').str[0].nunique())
 
-        st.write("")
+        tab1, tab2, tab3 = st.tabs(["📊 Analytics", "🔍 Explorer", "📥 Export"])
 
-        # Row 2: Analytics Tabs
-        tab_viz, tab_table, tab_export = st.tabs(["📊 Analytics Heatmap", "🔍 Policy Explorer", "📥 Master Export"])
-
-        with tab_viz:
-            v1, v2 = st.columns(2)
-            with v1:
-                # Perbaikan: Pakai skema warna string yang aman
-                fig_pie = px.pie(df, names='Level', hole=0.5, 
-                                 title='Security Hardening Distribution',
-                                 color_discrete_sequence=px.colors.qualitative.T10)
-                fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+        with tab1:
+            c1, c2 = st.columns(2)
+            with c1:
+                fig_pie = px.pie(df, names='Level', title='Control Level Distribution', hole=0.4)
                 st.plotly_chart(fig_pie, use_container_width=True)
-            
-            with v2:
-                df['Category'] = df['Rule ID'].str.split('.').str[0]
-                cat_count = df.groupby('Category').size().reset_index(name='Rules')
-                fig_bar = px.bar(cat_count, x='Category', y='Rules', title='Rules Volume by Section',
-                                 color='Rules', color_continuous_scale='blues')
-                fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+            with c2:
+                df['Cat'] = df['Rule ID'].str.split('.').str[0]
+                fig_bar = px.bar(df.groupby('Cat').size().reset_index(name='Count'), x='Cat', y='Count', title='Rules by Category')
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-        with tab_table:
-            st.subheader("Global Policy Database")
-            search = st.text_input("Quick Filter (Title, Audit, or Remediation)...", "")
-            
-            if search:
-                mask = df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)
-                display_df = df[mask]
+        with tab2:
+            query = st.text_input("Global Search:", placeholder="e.g. Password, Audit, etc")
+            if query:
+                display_df = df[df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)]
             else:
                 display_df = df
-            
             st.dataframe(display_df, use_container_width=True, height=500)
 
-        with tab_export:
-            st.subheader("Reporting Center")
-            st.info("Pilih format ekspor untuk dokumen audit internal.")
+        with tab3:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                display_df.to_excel(writer, index=False, sheet_name='CIS_Master')
             
-            # Excel Buffer (XlsxWriter)
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
-                # Styling Header
-                workbook = writer.book
-                worksheet = writer.sheets['Audit_Checklist']
-                header_fmt = workbook.add_format({'bold': True, 'bg_color': '#00d4ff', 'border': 1})
-                for col_num, value in enumerate(df.columns.values):
-                    worksheet.write(0, col_num, value, header_fmt)
-
-            ex1, ex2 = st.columns(2)
-            with ex1:
-                st.download_button(
-                    label="📥 DOWNLOAD EXCEL (.xlsx)",
-                    data=excel_buffer.getvalue(),
-                    file_name=f"TITAN_AUDIT_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.ms-excel",
-                    use_container_width=True
-                )
-            with ex2:
-                csv_data = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📄 DOWNLOAD CSV (.csv)",
-                    data=csv_data,
-                    file_name=f"TITAN_AUDIT_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+            st.download_button(
+                label="📥 DOWNLOAD MASTER EXCEL (.xlsx)",
+                data=output.getvalue(),
+                file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
 if __name__ == "__main__":
     main()
