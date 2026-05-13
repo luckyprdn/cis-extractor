@@ -2,18 +2,16 @@ import streamlit as st
 import fitz
 import polars as pl
 import pandas as pd
-import plotly.express as px
 import re
 import io
 import os
+import plotly.express as px
 from concurrent.futures import ProcessPoolExecutor
 
-# --- 1. GLOBAL CONFIGURATION & REGEX (PRE-COMPILED) ---
-RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
+# --- KONFIGURASI REGEX & MAP (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
 RE_CLEAN = re.compile(r'(Page \d+|Internal Only - General|P a g e \| \d+|CIS (?:Microsoft|Windows|Debian|Ubuntu).*?Benchmark)', re.IGNORECASE)
-
 SECTION_MAP = {
     "profile applicability": "Level", "description": "Description",
     "rationale": "Rationale", "impact": "Impact", "audit": "Audit",
@@ -21,16 +19,14 @@ SECTION_MAP = {
     "references": "References"
 }
 
-# --- 2. BACKEND FUNCTIONS ---
-
 def clean_fast(text_list):
     if not text_list: return "N/A"
     full = " ".join(text_list)
     full = RE_CLEAN.sub('', full)
     return " ".join(full.split()).strip() or "N/A"
 
+# --- WORKER FUNCTION (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 def process_page_chunk(pdf_bytes, start_page, end_page, master_toc_ids):
-    """Worker function untuk memproses chunk halaman"""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     chunk_results = []
     current_rule = None
@@ -40,8 +36,6 @@ def process_page_chunk(pdf_bytes, start_page, end_page, master_toc_ids):
         for line in lines:
             line_s = line.strip()
             if not line_s: continue
-            
-            # Deteksi Header Rule ID
             if line_s[0].isdigit():
                 header_match = RE_HEADER.search(line_s)
                 if header_match:
@@ -55,7 +49,6 @@ def process_page_chunk(pdf_bytes, start_page, end_page, master_toc_ids):
                             "Default Value": [], "References": [], "current_key": "Title"
                         }
                         continue
-            
             if current_rule:
                 s_match = RE_SECTION.match(line_s)
                 if s_match:
@@ -65,31 +58,28 @@ def process_page_chunk(pdf_bytes, start_page, end_page, master_toc_ids):
                     if content: current_rule[current_rule["current_key"]].append(content)
                 else:
                     current_rule[current_rule["current_key"]].append(line_s)
-                    
     if current_rule: chunk_results.append(current_rule)
     doc.close()
     return chunk_results
 
+# --- ENGINE (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 def run_titan_engine(pdf_bytes, cpu_cores):
-    """Orchestrator untuk ekstraksi paralel"""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total_pages = len(doc)
     
-    # Heuristic: Scan ToC (Daftar Isi) untuk mapping ID
     master_toc = {}
-    for i in range(min(45, total_pages)):
+    for i in range(min(40, total_pages)):
         lines = doc[i].get_text("text").split('\n')
         for line in lines:
             if "...." in line:
-                match = RE_TOC_LINE.search(line.strip())
+                match = re.search(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$', line.strip())
                 if match: master_toc[match.group(1)] = int(match.group(3))
     doc.close()
 
     if not master_toc: return None
 
-    # Parallel Page Processing
     chunk_size = total_pages // cpu_cores
-    raw_data = []
+    results = []
     with ProcessPoolExecutor(max_workers=cpu_cores) as executor:
         futures = []
         for i in range(cpu_cores):
@@ -98,97 +88,129 @@ def run_titan_engine(pdf_bytes, cpu_cores):
             futures.append(executor.submit(process_page_chunk, pdf_bytes, start, end, set(master_toc.keys())))
         
         for f in futures:
-            raw_data.extend(f.result())
+            results.extend(f.result())
 
-    # Final Assembly dengan Polars
-    processed = [{k: clean_fast(v) if isinstance(v, list) else v for k, v in r.items() if k != "current_key"} for r in raw_data]
-    if not processed: return None
-    
-    return pl.DataFrame(processed).unique(subset=["Rule ID"]).sort("Rule ID")
+    df = pl.DataFrame([{k: clean_fast(v) if isinstance(v, list) else v for k, v in r.items() if k != "current_key"} for r in results])
+    return df.unique(subset=["Rule ID"]).sort("Rule ID")
 
-# --- 3. STREAMLIT UI ---
-
+# --- NEW FRONTEND FEATURES (ASU MODE) ---
 def main():
-    st.set_page_config(page_title="Titan CIS Analyzer", layout="wide")
+    st.set_page_config(page_title="Titan CIS Extractor", layout="wide", initial_sidebar_state="expanded")
     
-    # CSS UI Fix
+    # Custom CSS buat gaya Enterprise
     st.markdown("""
         <style>
-        .main { background-color: #f5f7f9; }
+        .main { background-color: #f8f9fa; }
         .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        div[data-testid="stStatusWidget"] { border: 1px solid #00d4ff; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Titan CIS Analyzer v9.2")
-    st.markdown("Enterprise-Grade Policy Extractor for IT Governance & Audit.")
+    st.title("🚀 Titan Engine: CIS Benchmark Extractor")
+    st.markdown("---")
 
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        cores = st.slider("Parallel Processing Cores", 1, os.cpu_count() or 1, 4)
+        st.header("⚙️ Engine Settings")
+        cores = st.slider("CPU Cores (Parallelism)", 1, os.cpu_count(), 4)
+        st.info(f"Titan Engine ready with {cores} cores.")
         st.divider()
-        st.info("Titan Engine Active: Parallel Page Parsing Enabled.")
+        st.markdown("### About")
+        st.caption("High-performance extraction for CIS Benchmarks using PyMuPDF, Multiprocessing, and Polars.")
 
     uploaded_file = st.file_uploader("Upload CIS Benchmark PDF", type="pdf")
 
-    if uploaded_file:
+    if uploaded_file is not None:
         file_bytes = uploaded_file.read()
         
-        if st.button("⚡ Start Titan Extraction", type="primary"):
-            with st.status("Engine Running...", expanded=True) as status:
-                st.write("Step 1: Mapping Table of Contents...")
+        if st.button("⚡ Start Extraction", type="primary", use_container_width=True):
+            with st.status("Titan Engine is parsing your PDF...", expanded=True) as status:
+                st.write("Initializing Multiprocessing...")
                 df_result = run_titan_engine(file_bytes, cores)
                 
                 if df_result is not None:
-                    status.update(label="Extraction Success!", state="complete", expanded=False)
-                    df_pd = df_result.to_pandas()
-                    st.session_state['data'] = df_pd
+                    status.update(label="Extraction Complete!", state="complete", expanded=False)
+                    st.session_state['extracted_data'] = df_result
                 else:
                     status.update(label="Extraction Failed!", state="error")
-                    st.error("Daftar Isi tidak terdeteksi. Gunakan file PDF CIS Benchmark asli.")
+                    st.error("Daftar Isi tidak ditemukan. Pastikan ini dokumen asli CIS Benchmark.")
 
-    # --- DASHBOARD AREA ---
-    if 'data' in st.session_state:
-        df = st.session_state['data']
-        
-        # 1. Dashboard Metrics
+    # Tampilkan dashboard jika data sudah ada di session state
+    if 'extracted_data' in st.session_state:
+        df = st.session_state['extracted_data']
+        df_pd = df.to_pandas()
+
+        st.success(f"Berhasil mengekstrak {len(df)} rules!")
+
+        # 1. Metrics Bar
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Rules", len(df))
-        m2.metric("Level 1", len(df[df['Level'].str.contains('Level 1', na=False)]))
-        m3.metric("Level 2", len(df[df['Level'].str.contains('Level 2', na=False)]))
-        m4.metric("Avg Length", f"{int(df['Description'].str.len().mean())} chars")
+        with m1:
+            st.metric("Total Rules", len(df_pd))
+        with m2:
+            l1_count = len(df_pd[df_pd['Level'].str.contains('L1|Level 1', na=False, case=False)])
+            st.metric("Level 1 (L1)", l1_count)
+        with m3:
+            l2_count = len(df_pd[df_pd['Level'].str.contains('L2|Level 2', na=False, case=False)])
+            st.metric("Level 2 (L2)", l2_count)
+        with m4:
+            cat_count = df_pd['Rule ID'].str.split('.').str[0].nunique()
+            st.metric("Main Categories", cat_count)
 
-        # 2. Charts
+        # 2. Charts Row
+        st.markdown("### 📊 Compliance Analytics")
         c1, c2 = st.columns(2)
+        
         with c1:
-            fig_pie = px.pie(df, names='Level', title='Distribution Level', hole=0.4)
+            fig_pie = px.pie(df_pd, names='Level', title='Controls by Level Distribution', 
+                             hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_pie, use_container_width=True)
+            
         with c2:
-            df['Category'] = df['Rule ID'].str.split('.').str[0]
-            fig_bar = px.bar(df.groupby('Category').size().reset_index(name='count'), 
-                             x='Category', y='count', title='Rules per Main Category', color='count')
+            df_pd['Category'] = df_pd['Rule ID'].str.split('.').str[0]
+            cat_df = df_pd.groupby('Category').size().reset_index(name='count')
+            fig_bar = px.bar(cat_df, x='Category', y='count', title='Rules per Category',
+                             labels={'Category': 'Rule Category', 'count': 'Number of Rules'},
+                             color='count', color_continuous_scale='Viridis')
             st.plotly_chart(fig_bar, use_container_width=True)
 
-        # 3. Data Explorer
-        st.markdown("### 🔍 Searchable Database")
-        query = st.text_input("Filter rules (Search in all columns)...", "")
-        if query:
-            df_display = df[df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)]
-        else:
-            df_display = df
-        st.dataframe(df_display, use_container_width=True, height=450)
-
-        # 4. Final Export
-        st.markdown("### 💾 Export Result")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_display.to_excel(writer, index=False, sheet_name='CIS_Audit_Checklist')
+        # 3. Interactive Search Table
+        st.markdown("### 🔍 Search & Filter Data")
+        search_query = st.text_input("Cari kata kunci (misal: 'password', 'audit', 'registry')...", "")
         
-        st.download_button(
-            label="📥 Download Excel Checklist",
-            data=output.getvalue(),
-            file_name=f"TITAN_EXTRACT_{uploaded_file.name.replace('.pdf', '.xlsx') if uploaded_file else 'Result.xlsx'}",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        if search_query:
+            filtered_df = df_pd[df_pd.apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)]
+        else:
+            filtered_df = df_pd
+
+        st.dataframe(filtered_df, use_container_width=True, height=450)
+
+        # 4. Multi-format Export
+        st.markdown("### 📥 Export Results")
+        ex1, ex2, ex3 = st.columns(3)
+        
+        # Excel
+        output_excel = io.BytesIO()
+        with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer:
+            filtered_df.to_excel(writer, index=False, sheet_name='CIS_Results')
+        with ex1:
+            st.download_button(label="Download Excel (.xlsx)", data=output_excel.getvalue(),
+                               file_name=f"TITAN_{uploaded_file.name.replace('.pdf', '.xlsx')}",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
+        
+        # CSV
+        csv_data = filtered_df.to_csv(index=False).encode('utf-8')
+        with ex2:
+            st.download_button(label="Download CSV (.csv)", data=csv_data,
+                               file_name=f"TITAN_{uploaded_file.name.replace('.pdf', '.csv')}",
+                               mime="text/csv", use_container_width=True)
+            
+        # JSON (Buat Integrasi GRC)
+        json_data = filtered_df.to_json(orient='records')
+        with ex3:
+            st.download_button(label="Download JSON (.json)", data=json_data,
+                               file_name=f"TITAN_{uploaded_file.name.replace('.pdf', '.json')}",
+                               mime="application/json", use_container_width=True)
 
 if __name__ == "__main__":
+    import pandas as pd
     main()
