@@ -244,26 +244,39 @@ if st.session_state.all_rules:
         )
 
     # TAB 2: JUKLAK / SOP GENERATOR (Personalized)
+# TAB 2: JUKLAK / SOP GENERATOR (Personalized)
     with tab_juklak:
-        selected = grid_response['selected_rows']
+        # Menangkap data seleksi dengan lebih fleksibel
+        selected = grid_response.get('selected_rows', [])
         
-        # FIX UNTUK KEYERROR: Pengecekan Aman Apakah Formatnya DataFrame Atau Bukan
-        if selected is not None and len(selected) > 0:
+        # Cek apakah ada data yang dipilih
+        has_selection = False
+        sel_id = None
+
+        if selected is not None:
+            # Skenario 1: Jika formatnya Pandas DataFrame
+            if isinstance(selected, pd.DataFrame) and not selected.empty:
+                sel_id = selected.iloc[0]['Rule ID']
+                has_selection = True
+            # Skenario 2: Jika formatnya List (List of Dicts atau List of Rows)
+            elif isinstance(selected, list) and len(selected) > 0:
+                # Ambil item pertama, cek jika itu dict atau object
+                item = selected[0]
+                sel_id = item.get('Rule ID') if isinstance(item, dict) else item['Rule ID']
+                has_selection = True
+
+        if has_selection and sel_id:
             try:
-                # Jika versi st_aggrid mereturn pandas DataFrame
-                if isinstance(selected, pd.DataFrame):
-                    sel_id = selected.iloc[0]['Rule ID']
-                # Jika versi st_aggrid mereturn list of dictionary
-                else:
-                    sel_id = selected[0]['Rule ID']
-                    
+                # Ambil data lengkap dari dataframe utama berdasarkan Rule ID
                 rule_data = df[df['Rule ID'] == sel_id].iloc[0]
                 
                 st.markdown('<div class="section-head">📄 Auto-Generated Draft</div>', unsafe_allow_html=True)
                 
+                # Draft disesuaikan dengan struktur organisasi di PNM (RSP & ATI)
                 draft_text = f"""### PETUNJUK PELAKSANAAN (JUKLAK) KEAMANAN ASET IT
 **Terkait:** {rule_data['Title']} ({rule_data['Rule ID']})
 **Framework Relasi:** {rule_data.get('Framework Map', 'N/A')}
+**Domain Area:** {rule_data.get('AI_Domain_Cluster', 'Unclassified')}
 
 ---
 
@@ -271,8 +284,8 @@ if st.session_state.all_rules:
 Memastikan pemenuhan postur keamanan siber organisasi selaras dengan standar operasional yang berlaku, khususnya pada kontrol `{rule_data['Title']}`.
 
 **2. RUANG LINGKUP & TANGGUNG JAWAB**
-* **Fungsi PMO (Rencana Strategi Perusahaan - RSP):** Melakukan tracking pemenuhan kontrol dan integrasi audit (UAR).
-* **Fungsi Eksekusi (Aplikasi dan Teknologi Informasi - ATI):** Menerapkan prosedur hardening dan remediasi teknis pada aset terkait.
+* **Fungsi PMO (Rencana Strategi Perusahaan - RSP):** Melakukan tracking pemenuhan kontrol, koordinasi pemenuhan maturity siber, dan integrasi audit (seperti User Access Review).
+* **Fungsi Eksekusi (Aplikasi dan Teknologi Informasi - ATI):** Menerapkan prosedur hardening, pengelolaan konfigurasi teknis, dan remediasi pada aset IT terkait.
 
 **3. RASIONALISASI KONTROL**
 {rule_data['Rationale']}
@@ -286,12 +299,19 @@ Metode untuk memverifikasi kepatuhan kontrol:
 > {rule_data['Audit']}
 """
                 st.markdown(f'<div style="background:#1a1f2e; padding:2rem; border-radius:10px; border:1px solid #2a3147;">{draft_text}</div>', unsafe_allow_html=True)
-                st.download_button("💾 Download Draft Juklak (Markdown)", draft_text, file_name=f"Juklak_{rule_data['Rule ID']}.md", mime="text/markdown")
+                
+                st.download_button(
+                    label=f"💾 Download Draft {rule_data['Rule ID']}",
+                    data=draft_text,
+                    file_name=f"Juklak_{rule_data['Rule ID']}.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
             except Exception as e:
-                st.error(f"Terjadi kesalahan saat memuat detail: {str(e)}")
+                st.error(f"Gagal memproses detail aturan: {str(e)}")
         else:
-            st.info("Pilih satu aturan di tab 'Interactive Grid' terlebih dahulu untuk membuat draft Juklak otomatis.")
-
+            st.warning("⚠️ Silakan kembali ke tab **Interactive Grid** dan pastikan Anda sudah **mencentang** salah satu baris aturan.")
+            
     # TAB 3: CHARTS
     with tab_chart:
         c1, c2 = st.columns(2)
