@@ -8,7 +8,7 @@ import os
 import time
 import plotly.express as px
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO) ---
+# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - TIDAK DISENTUH) ---
 RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
 RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
 RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
@@ -21,19 +21,14 @@ SECTION_MAP = {
     "references": "References"
 }
 
-# --- UPDATE FILTER: ANTI-DUPLIKAT ---
 def clean_fast(text_list):
     if not text_list: return "N/A"
-    
-    # Buang whitespace, buang string kosong, dan BUANG DUPLIKAT (Penting buat kolom Level)
-    # Pakai dict.fromkeys untuk menjaga urutan teks asli
     unique_items = list(dict.fromkeys([t.strip() for t in text_list if t.strip()]))
-    
     full = " ".join(unique_items)
     full = RE_CLEAN.sub('', full)
     return " ".join(full.split()).strip() or "N/A"
 
-# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - TETAP UNTOUCHED) ---
+# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL) ---
 def predator_engine(pdf_stream):
     doc = fitz.open(stream=pdf_stream, filetype="pdf")
     total_pages = len(doc)
@@ -104,91 +99,116 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. FRONTEND UI ---
+# --- 3. FRONTEND UI (MULTI-UPLOAD & COMPARE MODE) ---
 def main():
-    st.set_page_config(page_title="Predator CIS Analyzer", layout="wide", page_icon="🛡️")
+    st.set_page_config(page_title="Predator Compare Pro", layout="wide", page_icon="🛡️")
     
     st.markdown("""
         <style>
         .stApp { background-color: #f4f7f9; }
         .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e0e6ed; }
-        .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; }
+        .stButton>button { border-radius: 8px; font-weight: bold; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Predator Engine: CIS Pro Analyzer")
-    st.caption("IT Governance & Policy Optimization Tool")
+    st.title("🛡️ Predator Engine: Multi-Upload & Compare")
+    st.caption("IT Governance PNM - Benchmark Comparison Suite")
 
     with st.sidebar:
         st.header("Control Center")
         st.success("Predator v8.7 Ready")
-        st.info("Anti-Duplicate Level Filter Enabled")
         st.divider()
-        st.caption("PNM IT Audit Intelligence")
+        st.info("Comparison Mode: Based on Rule Title")
+        if st.button("Clear Session"):
+            for key in st.session_state.keys():
+                del st.session_state[key]
+            st.rerun()
 
-    uploaded_file = st.file_uploader("Upload CIS Benchmark PDF", type="pdf")
+    # MULTI UPLOAD
+    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs (Bisa pilih banyak file)", type="pdf", accept_multiple_files=True)
 
-    if uploaded_file:
-        file_bytes = uploaded_file.read()
-        
-        if st.button("🚀 RUN PREDATOR ENGINE", type="primary"):
-            start_time = time.time()
-            with st.status("Engine is hunting... 🎯", expanded=True) as status:
-                data = predator_engine(file_bytes)
-                if data:
-                    exec_time = time.time() - start_time
-                    status.update(label=f"Hunting Complete in {exec_time:.2f}s!", state="complete", expanded=False)
-                    st.session_state['data'] = pl.DataFrame(data).to_pandas()
+    if uploaded_files:
+        if st.button("🚀 EXECUTE MULTI-SCAN & COMPARE", type="primary"):
+            all_data = []
+            with st.status("Engine is hunting through multiple files...", expanded=True) as status:
+                for uploaded_file in uploaded_files:
+                    st.write(f"Scanning: {uploaded_file.name}...")
+                    file_bytes = uploaded_file.read()
+                    extracted = predator_engine(file_bytes)
+                    if extracted:
+                        df_tmp = pd.DataFrame(extracted)
+                        df_tmp['Source_File'] = uploaded_file.name # Tag sumber file
+                        all_data.append(df_tmp)
+                
+                if all_data:
+                    master_df = pd.concat(all_data, ignore_index=True)
+                    st.session_state['master_data'] = master_df
+                    status.update(label="All targets neutralized!", state="complete")
                 else:
-                    status.update(label="Target Lost!", state="error")
-                    st.error("Daftar Isi tidak ditemukan.")
+                    st.error("No data extracted from the uploaded files.")
 
-    if 'data' in st.session_state:
-        df = st.session_state['data']
+    # --- ANALYSIS DASHBOARD ---
+    if 'master_data' in st.session_state:
+        df = st.session_state['master_data']
+        total_files = df['Source_File'].nunique()
         
         st.divider()
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Rules", len(df))
         
-        l1 = len(df[df['Level'].str.contains('Level 1|L1', case=False, na=False)])
-        l2 = len(df[df['Level'].str.contains('Level 2|L2', case=False, na=False)])
+        # 1. Comparison Logic (Set Theory)
+        # Hitung berapa kali judul muncul di file yang berbeda
+        title_counts = df.groupby('Title')['Source_File'].nunique().reset_index()
+        title_counts.columns = ['Title', 'File_Count']
         
-        k2.metric("L1 Controls", l1)
-        k3.metric("L2 Controls", l2)
-        k4.metric("Sections", df['Rule ID'].str.split('.').str[0].nunique())
+        # Merge back ke df utama
+        df_analysis = df.merge(title_counts, on='Title')
+        
+        # COMMON RULES: Muncul di SEMUA file yang di-upload
+        common_df = df_analysis[df_analysis['File_Count'] == total_files].drop_duplicates(subset=['Title'])
+        
+        # SPECIFIC RULES: Cuma muncul di SATU file tertentu
+        specific_df = df_analysis[df_analysis['File_Count'] == 1]
 
-        tab1, tab2, tab3 = st.tabs(["📊 Analytics", "🔍 Explorer", "📥 Export"])
+        # UI Tabs
+        tab_sum, tab_common, tab_specific, tab_raw = st.tabs(["📊 Summary", "🔗 Common Rules", "🎯 Specific Rules", "📋 Raw Data"])
 
-        with tab1:
-            c1, c2 = st.columns(2)
-            with c1:
-                fig_pie = px.pie(df, names='Level', title='Control Level Distribution', hole=0.4)
-                st.plotly_chart(fig_pie, use_container_width=True)
-            with c2:
-                df['Cat'] = df['Rule ID'].str.split('.').str[0]
-                fig_bar = px.bar(df.groupby('Cat').size().reset_index(name='Count'), x='Cat', y='Count', title='Rules by Category')
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-        with tab2:
-            query = st.text_input("Global Search:", placeholder="e.g. Password, Audit, etc")
-            if query:
-                display_df = df[df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)]
-            else:
-                display_df = df
-            st.dataframe(display_df, use_container_width=True, height=500)
-
-        with tab3:
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                display_df.to_excel(writer, index=False, sheet_name='CIS_Master')
+        with tab_sum:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Files", total_files)
+            c2.metric("Common Rules (Global)", len(common_df))
+            c3.metric("Specific Rules (Unique)", len(specific_df))
             
-            st.download_button(
-                label="📥 DOWNLOAD MASTER EXCEL (.xlsx)",
-                data=output.getvalue(),
-                file_name=f"PREDATOR_EXTRACT_{uploaded_file.name.replace('.pdf', '')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            st.write("### Rules Distribution per File")
+            dist_df = df.groupby('Source_File').size().reset_index(name='Rule Count')
+            fig = px.bar(dist_df, x='Source_File', y='Rule Count', color='Rule Count', text_auto=True)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab_common:
+            st.subheader(f"Rules found in ALL {total_files} files")
+            st.info("Aturan ini adalah standar umum yang ada di setiap benchmark yang lo upload.")
+            st.dataframe(common_df[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
+            
+            # Export Common
+            out_common = io.BytesIO()
+            common_df.to_excel(out_common, index=False)
+            st.download_button("📥 Download Common Rules", out_common.getvalue(), "common_rules.xlsx")
+
+        with tab_specific:
+            st.subheader("Rules unique to specific files")
+            selected_file = st.selectbox("Filter Specific Rules by File:", options=df['Source_File'].unique())
+            file_spec_df = specific_df[specific_df['Source_File'] == selected_file]
+            
+            st.warning(f"Ditemukan {len(file_spec_df)} aturan yang HANYA ada di file ini.")
+            st.dataframe(file_spec_df[['Rule ID', 'Title', 'Level', 'Description']], use_container_width=True)
+            
+            # Export Specific
+            out_spec = io.BytesIO()
+            file_spec_df.to_excel(out_spec, index=False)
+            st.download_button(f"📥 Download Unique Rules for {selected_file[:20]}...", out_spec.getvalue(), "specific_rules.xlsx")
+
+        with tab_raw:
+            st.subheader("Combined Dataset")
+            st.dataframe(df, use_container_width=True)
 
 if __name__ == "__main__":
+    import pandas as pd
     main()
