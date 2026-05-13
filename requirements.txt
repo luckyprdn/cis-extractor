@@ -4,3 +4,5 @@ polars
 pandas
 xlsxwriter
 plotly
+wordcloud
+matplotlib
