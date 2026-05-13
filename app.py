@@ -7,7 +7,6 @@ import io
 import os
 import time
 import plotly.express as px
-import plotly.graph_objects as go
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
@@ -102,7 +101,7 @@ def predator_engine(pdf_stream):
             })
     return final_results
 
-# --- 3. EXECUTIVE FRONTEND (MODERN UI) ---
+# --- 3. EXECUTIVE FRONTEND (FIXED & OPTIMIZED) ---
 def main():
     st.set_page_config(page_title="Titan Predator Pro", layout="wide", page_icon="🛡️")
     
@@ -111,8 +110,6 @@ def main():
         .stApp { background-color: #0e1117; color: #e0e6ed; }
         .stMetric { background-color: #1a1c24; padding: 20px; border-radius: 12px; border: 1px solid #3d444d; }
         .stButton>button { border-radius: 10px; font-weight: bold; background-color: #00d4ff; color: #000; border: none; }
-        .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-        .stTabs [data-baseweb="tab"] { background-color: #1a1c24; border-radius: 5px; color: white; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -126,20 +123,18 @@ def main():
         st.markdown("### Filters")
         lv_filter = st.multiselect("Filter by Level", ["Level 1", "Level 2"], default=["Level 1", "Level 2"])
         st.divider()
-        st.caption("Engine Logs: Zero-Disk I/O Active")
         if st.button("Clear Session Cache"):
             st.session_state.clear()
             st.rerun()
 
-    # Multi-Upload
-    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs (Single or Multiple)", type="pdf", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Upload CIS Benchmark PDFs", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
-        if st.button("🚀 EXECUTE PREDATOR SCAN", type="primary", use_container_width=True):
+        if st.button("🚀 EXECUTE PREDATOR SCAN", type="primary", width="stretch"):
             start_time = time.time()
             all_dfs = []
             
-            with st.status("Engine is hunting through targets... 🎯", expanded=True) as status:
+            with st.status("Engine is hunting... 🎯", expanded=True) as status:
                 for uploaded_file in uploaded_files:
                     st.write(f"Slicing: {uploaded_file.name}...")
                     file_bytes = uploaded_file.read()
@@ -157,19 +152,16 @@ def main():
                 else:
                     st.error("No valid data extracted.")
 
-    # --- RESULTS DASHBOARD ---
     if 'master_data' in st.session_state:
         df = st.session_state['master_data']
         exec_t = st.session_state['exec_time']
         
-        # Apply Sidebar Filters
         if lv_filter:
             pattern = "|".join(lv_filter)
             df = df[df['Level'].str.contains(pattern, case=False, na=False)]
 
         st.divider()
         
-        # KPI Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Rules", len(df))
         m2.metric("L1 Controls", len(df[df['Level'].str.contains('L1|Level 1', case=False, na=False)]))
@@ -183,53 +175,51 @@ def main():
             with c1:
                 fig_pie = px.pie(df, names='Level', title='Control Level Distribution', hole=0.5,
                                  color_discrete_sequence=px.colors.qualitative.Vivid)
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, width="stretch")
             with c2:
                 df['Cat'] = df['Rule ID'].str.split('.').str[0]
                 fig_bar = px.bar(df.groupby(['Source', 'Cat']).size().reset_index(name='Count'), 
                                  x='Cat', y='Count', color='Source', barmode='group', title='Rules by Category')
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, width="stretch")
 
         with tab_compare:
             if df['Source'].nunique() > 1:
-                st.subheader("Common vs Specific Rules")
-                # Logic Comparison based on Title
                 t_counts = df.groupby('Title')['Source'].nunique().reset_index()
                 t_counts.columns = ['Title', 'File_Count']
                 df_c = df.merge(t_counts, on='Title')
-                
                 common = df_c[df_c['File_Count'] == df['Source'].nunique()].drop_duplicates('Title')
                 specific = df_c[df_c['File_Count'] == 1]
                 
                 cc1, cc2 = st.columns(2)
-                cc1.info(f"**Common Rules:** {len(common)} (Muncul di semua file)")
-                cc2.warning(f"**Specific Rules:** {len(specific)} (Hanya di file tertentu)")
-                
-                st.write("### Specific Rules Explorer")
-                sel_source = st.selectbox("Select File to see unique rules:", df['Source'].unique())
-                st.dataframe(specific[specific['Source'] == sel_source][['Rule ID', 'Title', 'Level']], width=None)
+                cc1.info(f"**Common Rules:** {len(common)}")
+                cc2.warning(f"**Specific Rules:** {len(specific)}")
+                sel_source = st.selectbox("Select File for unique rules:", df['Source'].unique())
+                st.dataframe(specific[specific['Source'] == sel_source][['Rule ID', 'Title', 'Level']])
             else:
-                st.info("Upload lebih dari satu file untuk menggunakan fitur Comparison.")
+                st.info("Upload >1 file for comparison.")
 
         with tab_explorer:
-            st.markdown("### 🔍 Global Search")
-            query = st.text_input("Cari kata kunci (Title, Audit, dsb):", "")
-            if query:
-                df_disp = df[df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)]
-            else:
-                df_disp = df
-            st.dataframe(df_disp, width=None)
+            query = st.text_input("Global Search:", "")
+            df_disp = df[df.apply(lambda r: r.astype(str).str.contains(query, case=False).any(), axis=1)] if query else df
+            st.dataframe(df_disp)
 
-            # Export Excel (Fixed Cell Length Warning in logs)
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # Kita kasih note di Excel kalau ada cell yang kepotong
+            st.warning("⚠️ Excel memiliki batas 32,767 karakter per cell. Gunakan CSV jika data Audit/Remediation sangat panjang.")
+            
+            # Excel Buffer
+            output_ex = io.BytesIO()
+            with pd.ExcelWriter(output_ex, engine='xlsxwriter') as writer:
                 df_disp.to_excel(writer, index=False, sheet_name='Audit_Checklist')
             
-            st.download_button("📥 Download Master Excel", output.getvalue(), f"TITAN_AUDIT_{int(time.time())}.xlsx")
+            # CSV Buffer (No character limit)
+            output_csv = df_disp.to_csv(index=False).encode('utf-8')
+
+            ex1, ex2 = st.columns(2)
+            with ex1:
+                st.download_button("📥 Download Excel (Standard)", output_ex.getvalue(), "audit.xlsx", width="stretch")
+            with ex2:
+                st.download_button("📥 Download CSV (Full Data)", output_csv, "audit_full.csv", width="stretch")
 
         with tab_cloud:
-            st.subheader("Policy Theme Discovery")
             text_blob = " ".join(df['Description'].astype(str))
             wc = WordCloud(width=800, height=400, background_color='#0e1117', colormap='Blues').generate(text_blob)
             fig_wc, ax = plt.subplots(figsize=(10, 5), facecolor='#0e1117')
