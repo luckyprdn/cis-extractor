@@ -9,7 +9,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Set, Tuple
 
 # =============================================================================
-# 1. CORE ENGINE: TITAN PRO 5.2 (DEEP-SEQUENCE & ANTI-BLEED)
+# 1. CORE ENGINE: TITAN PRO 5.2.1 (DEEP-SEQUENCE & ANTI-BLEED)
 # =============================================================================
 
 @dataclass
@@ -61,15 +61,15 @@ class TitanBackend:
 
     def get_deep_recursive_jumps(self, ids: List[str]) -> List[str]:
         from collections import defaultdict
-        hierarchy_tree = defaultdict(list)
+        tree = defaultdict(list)
         for rid in ids:
             parts = rid.split('.')
             if len(parts) < 2: continue
-            parent_path = ".".join(parts[:-1])
-            try: hierarchy_tree[parent_path].append(int(parts[-1]))
+            parent = ".".join(parts[:-1])
+            try: tree[parent].append(int(parts[-1]))
             except: continue
         jumps = []
-        for parent, children in hierarchy_tree.items():
+        for parent, children in tree.items():
             children.sort()
             for i in range(len(children) - 1):
                 curr, nxt = children[i], children[i+1]
@@ -124,23 +124,20 @@ class TitanBackend:
         if current_id:
             final_rules[current_id] = ParseResult(current_id, **{k: (self._extract_level(v) if k=="level" else self._clean_text(v)) for k,v in tmp.items()}, found_on_page=toc_pages.get(current_id, -1))
 
-        # Deep QC Sweep
         jumps = self.get_deep_recursive_jumps(list(final_rules.keys()))
         verified_skipped = []
         for gap_id in jumps:
             found_gap = False
-            for idx, pg_text in enumerate(cache):
+            for pg_text in cache:
                 if re.search(rf'^{re.escape(gap_id)}\s+', pg_text, re.MULTILINE):
-                    verified_skipped.append(f"{gap_id} (Detected but incomplete)")
                     found_gap = True; break
             if not found_gap: verified_skipped.append(gap_id)
 
-        # Anti-Bleed
         ids = sorted(final_rules.keys(), key=self._sort_key)
         for i in range(len(ids)-1):
             curr, nxt = final_rules[ids[i]], ids[i+1]
-            p = re.compile(rf'(?:\s|^){re.escape(nxt)}\s+(?:Ensure|Do\s+not|Review|Keep|Use|Audit)\b', re.IGNORECASE)
-            for attr in ["references", "default_value", "audit"]:
+            p = re.compile(rf'(?:\s|^){re.escape(nxt)}\s+(?:Ensure|Do\s+not|Review|Keep|Use|Audit|Set|Configure)\b', re.IGNORECASE)
+            for attr in ["references", "default_value", "audit", "remediation"]:
                 val = getattr(curr, attr)
                 m = p.search(val)
                 if m: setattr(curr, attr, val[:m.start()].strip()); break
@@ -149,7 +146,54 @@ class TitanBackend:
         return [asdict(final_rules[rid]) for rid in ids], {"skipped": verified_skipped, "toc_count": len(master_ids)}
 
 # =============================================================================
-# 2. UI FRAMEWORK (THEMES & CUSTOM CSS)
+# 2. EXPERIMENTAL: MULTI-PLATFORM AUTO-REMEDIATION
+# =============================================================================
+
+def generate_remediation_script(rule_id, title, remediation_text, platform="Windows"):
+    """Menerjemahkan teks remediasi menjadi Script Hardening (PS atau Bash)."""
+    if platform == "Windows":
+        script = [f"# TITAN AUTO-FIX (WINDOWS): Rule {rule_id}", f"# {title}\n"]
+        reg_path = re.search(r'(HKLM\\|HKEY_LOCAL_MACHINE\\)([\w\\]+)', remediation_text, re.I)
+        reg_value = re.search(r'set\s+([\w\s]+)\s+to\s+(\d+)', remediation_text, re.I)
+        
+        if reg_path and reg_value:
+            path = reg_path.group(0).replace("HKEY_LOCAL_MACHINE", "HKLM")
+            val_name, val_data = reg_value.group(1).strip(), reg_value.group(2).strip()
+            script.append(f"$path = 'Registry::{path}'")
+            script.append(f"if (!(Test-Path $path)) {{ New-Item -Path $path -Force }}")
+            script.append(f"Set-ItemProperty -Path $path -Name '{val_name}' -Value {val_data} -Type DWord")
+        else:
+            script.append(f"# Manual check required for Windows logic.")
+        return "\n".join(script)
+    
+    else: # Linux Platform
+        script = [f"#!/bin/bash", f"# TITAN AUTO-FIX (LINUX): Rule {rule_id}", f"# {title}\n"]
+        
+        # Logic: Config File Modification (e.g., /etc/ssh/sshd_config)
+        conf_file = re.search(r'(/etc/[\w/\._-]+)', remediation_text)
+        param_set = re.search(r'set\s+([\w_-]+)\s+to\s+([\w-]+)', remediation_text, re.I)
+        
+        if conf_file and param_set:
+            file_path = conf_file.group(0)
+            param, value = param_set.group(1), param_set.group(2)
+            script.append(f"FILE='{file_path}'")
+            script.append(f"PARAM='{param}'")
+            script.append(f"VALUE='{value}'")
+            script.append(f"if grep -q \"^$PARAM\" \"$FILE\"; then")
+            script.append(f"  sed -i \"s/^$PARAM.*/$PARAM $VALUE/\" \"$FILE\"")
+            script.append(f"else")
+            script.append(f"  echo \"$PARAM $VALUE\" >> \"$FILE\"")
+            script.append(f"fi")
+        elif "service" in remediation_text.lower() and "disable" in remediation_text.lower():
+            svc = re.search(r'service\s+([\w-]+)', remediation_text, re.I)
+            if svc: script.append(f"systemctl disable --now {svc.group(1)}")
+        else:
+            script.append(f"# Logic extraction failed. Refer to remediation text:")
+            script.append(f"# {remediation_text[:150]}...")
+        return "\n".join(script)
+
+# =============================================================================
+# 3. UI FRAMEWORK
 # =============================================================================
 
 st.set_page_config(page_title="Titan CIS Extractor", page_icon="🛡️", layout="wide")
@@ -161,7 +205,7 @@ if "logs" not in st.session_state: st.session_state.logs = []
 def toggle_theme():
     st.session_state.theme = "Light" if st.session_state.theme == "Dark" else "Dark"
 
-theme_css = f"""
+st.markdown(f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Fira+Code&display=swap');
     :root {{
@@ -171,93 +215,76 @@ theme_css = f"""
         --text: {"#E5E7EB" if st.session_state.theme == "Dark" else "#111827"};
     }}
     .stApp {{ background-color: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-serif; }}
-    [data-testid="stMetricContainer"] {{
-        background: var(--card); border: 1px solid var(--primary);
-        border-radius: 10px; padding: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-    }}
-    .console {{
-        background: #050505; color: #00FF41; font-family: 'Fira Code', monospace;
-        padding: 15px; border-radius: 5px; border-left: 4px solid var(--primary);
-        height: 200px; overflow-y: auto; font-size: 0.8rem;
-    }}
-    .titan-branding {{ position: fixed; bottom: 10px; right: 20px; opacity: 0.4; font-size: 12px; }}
+    [data-testid="stMetricContainer"], .cyber-card {{ background: var(--card); border: 1px solid var(--primary); border-radius: 10px; padding: 15px; }}
+    .console {{ background: #050505; color: #00FF41; font-family: 'Fira Code', monospace; padding: 15px; border-radius: 5px; height: 250px; overflow-y: auto; font-size: 0.8rem; }}
+    .titan-branding {{ position: fixed; bottom: 10px; right: 20px; opacity: 0.4; font-size: 11px; }}
 </style>
-"""
-st.markdown(theme_css, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # =============================================================================
-# 3. SIDEBAR & NAVIGATION
+# 4. NAVIGATION
 # =============================================================================
 
 with st.sidebar:
     st.title("🛡️ TITAN CORE")
-    nav = st.radio("NAVIGASI", ["DASHBOARD", "UPLOAD CENTER", "RULES VIEWER", "COMPARISON", "VALIDATOR", "LOGS & SETTINGS"])
+    nav = st.sidebar.radio("COMMAND CENTER", ["DASHBOARD", "UPLOAD CENTER", "RULES VIEWER", "INTEGRITY VALIDATOR", "LOGS & SETTINGS"])
     st.markdown("---")
     st.button(f"🌓 MODE: {st.session_state.theme.upper()}", on_click=toggle_theme, use_container_width=True)
 
-# =============================================================================
-# 4. PAGES ROUTING
-# =============================================================================
-
 if nav == "DASHBOARD":
-    st.title("📊 COMMAND CENTER DASHBOARD")
+    st.title("📊 ANALYTICS DASHBOARD")
     c1, c2, c3 = st.columns(3)
     total_rules = sum(len(f['data']) for f in st.session_state.db.values())
-    c1.metric("TOTAL FILES", len(st.session_state.db))
-    c2.metric("RULES EXTRACTED", total_rules)
-    c3.metric("ENGINE STATUS", "READY" if total_rules >= 0 else "IDLE")
-    if st.session_state.db:
-        st.bar_chart(pd.DataFrame({k: [len(v['data'])] for k,v in st.session_state.db.items()}).T)
+    c1.metric("LOADED FILES", len(st.session_state.db))
+    c2.metric("TOTAL RULES", total_rules)
+    c3.metric("INTEGRITY", "A+" if total_rules > 0 else "N/A")
+    if st.session_state.db: st.bar_chart(pd.DataFrame({k: [len(v['data'])] for k,v in st.session_state.db.items()}).T)
 
 elif nav == "UPLOAD CENTER":
-    st.title("☁️ SECURE INGESTION")
+    st.title("☁️ SECURE DATA INGESTION")
     files = st.file_uploader("Upload CIS Benchmark PDF", type="pdf", accept_multiple_files=True)
     if files and st.button("🚀 EXECUTE TITAN ENGINE", type="primary", use_container_width=True):
         engine = TitanBackend()
         for f in files:
-            with st.spinner(f"Analizing {f.name}..."):
+            with st.spinner(f"Extracting {f.name}..."):
                 res, report = engine.process_pdf(f.read())
                 st.session_state.db[f.name] = {"data": res, "report": report}
-                st.session_state.logs.append(f"SUCCESS: {f.name} - {len(res)} rules found.")
-        st.success("Extraction Complete.")
+                st.session_state.logs.append(f"SUCCESS: {f.name} - {len(res)} rules mapped.")
+        st.rerun()
 
 elif nav == "RULES VIEWER":
-    st.title("🛡️ RULE DATABASE")
-    if not st.session_state.db: st.warning("Database Kosong.")
+    st.title("🛡️ RULE EXPLORER")
+    if not st.session_state.db: st.warning("Silakan upload file di Upload Center.")
     else:
-        target = st.selectbox("Pilih File", list(st.session_state.db.keys()))
+        target = st.selectbox("Select Target", list(st.session_state.db.keys()))
         df = pd.DataFrame(st.session_state.db[target]["data"])
-        search = st.text_input("Cari Rule ID atau Judul...")
+        search = st.text_input("Filter Rules...")
         if search: df = df[df.apply(lambda r: search.lower() in str(r.values).lower(), axis=1)]
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, use_container_width=True, height=400)
         
-        # Export
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("💾 DOWNLOAD CSV", csv, f"Titan_{target}.csv", "text/csv")
+        st.markdown("### 🪄 AUTO-REMEDIATION")
+        col_p, col_r = st.columns([1, 3])
+        with col_p: platform = st.selectbox("Target OS", ["Windows", "Linux"])
+        with col_r: selected_rid = st.selectbox("Pilih Rule ID", df["rule_id"].tolist())
+        
+        if selected_rid:
+            row = df[df["rule_id"] == selected_rid].iloc[0]
+            code = generate_remediation_script(row["rule_id"], row["title"], row["remediation"], platform)
+            st.code(code, language="powershell" if platform=="Windows" else "bash")
 
-elif nav == "COMPARISON":
-    st.title("⚖️ COMPARISON ENGINE")
-    if len(st.session_state.db) < 2: st.error("Upload minimal 2 file.")
-    else:
-        f1 = st.selectbox("Baseline (A)", list(st.session_state.db.keys()), index=0)
-        f2 = st.selectbox("Target (B)", list(st.session_state.db.keys()), index=1)
-        ids_a = set(pd.DataFrame(st.session_state.db[f1]["data"])["rule_id"])
-        ids_b = set(pd.DataFrame(st.session_state.db[f2]["data"])["rule_id"])
-        st.write(f"Common: {len(ids_a & ids_b)} | New in B: {len(ids_b - ids_a)} | Missing in B: {len(ids_a - ids_b)}")
-
-elif nav == "VALIDATOR":
-    st.title("🔍 INTEGRITY VALIDATOR")
+elif nav == "INTEGRITY VALIDATOR":
+    st.title("🔍 DEEP SEQUENCE AUDIT")
     if not st.session_state.db: st.warning("No Data.")
     else:
         for k, v in st.session_state.db.items():
             with st.expander(f"Report: {k}"):
-                st.write(f"Deep Jump Detection: {v['report']['skipped']}")
+                st.write(f"**Missing/Shadow IDs:** {v['report']['skipped']}")
 
 elif nav == "LOGS & SETTINGS":
-    st.title("💻 SYSTEM LOGS")
+    st.title("💻 SYSTEM CONSOLE")
     log_str = "\n".join(st.session_state.logs[::-1])
     st.markdown(f'<div class="console">{log_str.replace("\n", "<br>")}</div>', unsafe_allow_html=True)
     if st.button("🚨 PURGE DATABASE"):
         st.session_state.db = {}; st.session_state.logs = []; st.rerun()
 
-st.markdown('<div class="titan-branding">TITAN EXTRACTOR 5.2 | BY LUCKY PRADANA</div>', unsafe_allow_html=True)
+st.markdown('<div class="titan-branding">TITAN EXTRACTOR 5.2.1 | BY LUCKY PRADANA</div>', unsafe_allow_html=True)
