@@ -5,13 +5,12 @@ import pandas as pd
 import re
 import io
 import os
-import time
-import plotly.express as px
+from concurrent.futures import ProcessPoolExecutor
 
-# --- 1. GLOBAL PRE-COMPILED REGEX (LOGIKA ASLI LO - PREDATOR 8.7) ---
-RE_TOC_LINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
-RE_HEADER = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
-RE_SECTION = re.compile(r'(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
+# --- KONFIGURASI REGEX & MAP ---
+RE_TOC = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*?)\.*?\s+(\d+)$')
+RE_HEADER_STRICT = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
+RE_SECTION = re.compile(r'^(Profile Applicability|Description|Rationale|Impact|Audit|Remediation|Default Value|References):?', re.IGNORECASE)
 RE_CLEAN = re.compile(r'(Page \d+|Internal Only - General|P a g e \| \d+|CIS (?:Microsoft|Windows|Debian|Ubuntu).*?Benchmark)', re.IGNORECASE)
 
 SECTION_MAP = {
@@ -23,145 +22,228 @@ SECTION_MAP = {
 
 def clean_fast(text_list):
     if not text_list: return "N/A"
-    # Deduplikasi baris (Fix Masalah Level Berulang)
-    unique_items = list(dict.fromkeys([t.strip() for t in text_list if t.strip()]))
-    full = " ".join(unique_items)
+    full = " ".join(text_list)
     full = RE_CLEAN.sub('', full)
     return " ".join(full.split()).strip() or "N/A"
 
-# --- 2. PREDATOR ENGINE (LOGIKA ASLI LO - 100% ORIGINAL) ---
-def predator_engine(pdf_stream):
-    doc = fitz.open(stream=pdf_stream, filetype="pdf")
-    total_pages = len(doc)
-    all_pages_content = []
-    master_toc = {}
-
-    # Caching pages & ToC Mapping
-    for i in range(total_pages):
-        page_text = doc[i].get_text("text")
-        lines = [line.strip() for line in page_text.split('\n') if line.strip()]
-        all_pages_content.append(lines)
-        if i < 25:
-            for line in lines:
-                match = RE_TOC_LINE.search(line)
-                if match and "...." in line:
-                    master_toc[match.group(1)] = {"page": int(match.group(3))}
+# --- FASE 1: WORKER FAST SCAN (PASS 1) ---
+def process_page_chunk(pdf_bytes, start_page, end_page, master_toc_ids):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    chunk_results = []
+    current_rule = None
+    
+    for p in range(start_page, end_page):
+        lines = doc[p].get_text("text").split('\n')
+        for line in lines:
+            line_s = line.strip()
+            if not line_s: continue
+            
+            if line_s[0].isdigit():
+                header_match = RE_HEADER_STRICT.search(line_s)
+                if header_match:
+                    rid = header_match.group(1)
+                    if rid in master_toc_ids:
+                        if current_rule: chunk_results.append(current_rule)
+                        current_rule = {
+                            "Rule ID": rid, "Title": [header_match.group(2)],
+                            "Level": [], "Description": [], "Rationale": [],
+                            "Impact": [], "Audit": [], "Remediation": [],
+                            "Default Value": [], "References": [], "current_key": "Title"
+                        }
+                        continue
+            
+            if current_rule:
+                s_match = RE_SECTION.match(line_s)
+                if s_match:
+                    key_lower = s_match.group(1).lower()
+                    current_rule["current_key"] = SECTION_MAP.get(key_lower, "Description")
+                    content = RE_SECTION.sub('', line_s).strip()
+                    if content: current_rule[current_rule["current_key"]].append(content)
+                else:
+                    current_rule[current_rule["current_key"]].append(line_s)
+                    
+    if current_rule: chunk_results.append(current_rule)
     doc.close()
+    return chunk_results
 
-    all_ids = sorted(master_toc.keys(), key=lambda x: [int(i) for i in x.split('.')])
-    final_results = []
+# --- FASE 2: RECURSIVE RESCUE SCAN (PASS 2 - ANTI GAP) ---
+def build_fuzzy_regex(rule_id):
+    # Mengizinkan spasi berlebih atau karakter aneh antar titik untuk OCR Tolerance
+    escaped_id = rule_id.replace('.', r'\s*\.\s*')
+    return re.compile(rf'^({escaped_id})\s+(.*)', re.IGNORECASE)
 
-    for i, rid in enumerate(all_ids):
-        # Memory Slicing Range
-        start_idx = max(0, master_toc[rid]["page"] - 3)
-        next_rid = all_ids[i+1] if i+1 < len(all_ids) else None
-        end_idx = min(total_pages, (master_toc[next_rid]["page"] + 2) if next_rid else total_pages)
-
-        rule_data = {
-            "Rule ID": rid, "Title": [], "Level": [], "Description": [],
-            "Rationale": [], "Impact": [], "Audit": [], "Remediation": [],
-            "Default Value": [], "References": [], "current_key": "Title"
-        }
+def rescue_scan(doc, missing_id, start_p, end_p):
+    """
+    Melakukan scan berulang dengan Fuzzy Regex dan Heading Structure Detection.
+    Berperan sebagai OCR reinforcement proxy untuk layout PDF yang rusak.
+    """
+    fuzzy_re = build_fuzzy_regex(missing_id)
+    rescued_rule = None
+    
+    for p in range(max(0, start_p), min(len(doc), end_p + 1)):
+        # Menggunakan "blocks" (Structural Detection) untuk mengatasi teks yang tersembunyi
+        blocks = doc[p].get_text("blocks")
+        blocks.sort(key=lambda b: b[1]) # Sort by Y coordinate
         
-        found = False
-        for p in range(start_idx, end_idx):
-            page_lines = all_pages_content[p]
-            for line in page_lines:
-                h_match = RE_HEADER.search(line)
-                if h_match and h_match.group(1) == rid:
-                    rule_data["Title"].append(h_match.group(2))
-                    found = True
+        for b in blocks:
+            text_block = b[4].strip()
+            lines = text_block.split('\n')
+            
+            for line in lines:
+                line_s = line.strip()
+                if not line_s: continue
+                
+                # Coba Fuzzy Match
+                h_match = fuzzy_re.search(line_s) or RE_HEADER_STRICT.search(line_s)
+                
+                if h_match and h_match.group(1).replace(' ', '') == missing_id:
+                    if rescued_rule: return rescued_rule # Stop if another rule starts
+                    rescued_rule = {
+                        "Rule ID": missing_id, "Title": [h_match.group(2)],
+                        "Level": [], "Description": [], "Rationale": [],
+                        "Impact": [], "Audit": [], "Remediation": [],
+                        "Default Value": [], "References": [], "current_key": "Title"
+                    }
                     continue
                 
-                if found and h_match and h_match.group(1) != rid:
-                    if h_match.group(1) in master_toc:
-                        break 
-                
-                if found:
-                    s_match = RE_SECTION.search(line)
+                if rescued_rule:
+                    # Deteksi perpindahan ID untuk memberhentikan rescue scan
+                    if RE_HEADER_STRICT.match(line_s):
+                        potential_id = RE_HEADER_STRICT.match(line_s).group(1)
+                        if potential_id != missing_id: return rescued_rule
+                    
+                    s_match = RE_SECTION.match(line_s)
                     if s_match:
                         key_lower = s_match.group(1).lower()
-                        rule_data["current_key"] = SECTION_MAP.get(key_lower, "Description")
-                        content = RE_SECTION.sub('', line).strip()
-                        if content: rule_data[rule_data["current_key"]].append(content)
+                        rescued_rule["current_key"] = SECTION_MAP.get(key_lower, "Description")
+                        content = RE_SECTION.sub('', line_s).strip()
+                        if content: rescued_rule[rescued_rule["current_key"]].append(content)
                     else:
-                        rule_data[rule_data["current_key"]].append(line)
-            if found and h_match and h_match.group(1) in master_toc and h_match.group(1) != rid:
-                break
+                        rescued_rule[rescued_rule["current_key"]].append(line_s)
+                        
+    return rescued_rule
 
-        if found:
-            final_results.append({
-                "Rule ID": rid,
-                "Title": clean_fast(rule_data["Title"]),
-                "Level": clean_fast(rule_data["Level"]),
-                "Description": clean_fast(rule_data["Description"]),
-                "Rationale": clean_fast(rule_data["Rationale"]),
-                "Impact": clean_fast(rule_data["Impact"]),
-                "Audit": clean_fast(rule_data["Audit"]),
-                "Remediation": clean_fast(rule_data["Remediation"]),
-                "Default Value": clean_fast(rule_data["Default Value"]),
-                "References": clean_fast(rule_data["References"])
-            })
-    return final_results
-
-# --- 3. FRONTEND UI ---
-def main():
-    st.set_page_config(page_title="Titan Predator v8.7", layout="wide", page_icon="🛡️")
+# --- ENGINE ORCHESTRATOR ---
+def run_titan_engine(pdf_bytes, cpu_cores, status_placeholder):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(doc)
     
-    st.title("🛡️ Predator Engine: CIS Pro Analyzer")
-    st.caption("IT Governance & Policy Optimization Tool | PNM Execution")
+    # 1. GROUND TRUTH (ToC SEQUENCE AWARENESS)
+    status_placeholder.write("⚙️ Membangun Sequence Ground Truth dari ToC...")
+    master_toc = {}
+    ordered_ids = []
+    
+    for i in range(min(50, total_pages)):
+        lines = doc[i].get_text("text").split('\n')
+        for line in lines:
+            if "...." in line:
+                match = RE_TOC.search(line.strip())
+                if match:
+                    rid, rtitle, rpage = match.groups()
+                    master_toc[rid] = int(rpage)
+                    ordered_ids.append(rid)
+    
+    if not master_toc:
+        doc.close()
+        return None, None, None
+
+    # 2. PASS 1: PARALLEL SCAN
+    status_placeholder.write("⚡ Eksekusi Multi-Pass (Pass 1: Parallel High-Speed)...")
+    chunk_size = total_pages // cpu_cores
+    results = []
+    
+    with ProcessPoolExecutor(max_workers=cpu_cores) as executor:
+        futures = []
+        for i in range(cpu_cores):
+            start = i * chunk_size
+            end = total_pages if i == cpu_cores - 1 else (i + 1) * chunk_size
+            futures.append(executor.submit(process_page_chunk, pdf_bytes, start, end, set(master_toc.keys())))
+        
+        for f in futures:
+            results.extend(f.result())
+
+    extracted_ids = {r["Rule ID"] for r in results}
+    
+    # 3. GAP DETECTION & INTEGRITY VALIDATION
+    missing_ids = [rid for rid in ordered_ids if rid not in extracted_ids]
+    rescued_results = []
+    
+    if missing_ids:
+        status_placeholder.write(f"⚠️ Gap Numbering Terdeteksi: {len(missing_ids)} rules missing. Memulai Recursive Rescanning...")
+        
+        # 4. PASS 2: RECURSIVE RESCUE SCAN
+        for missing_id in missing_ids:
+            # Cari batas halaman dari ToC
+            idx = ordered_ids.index(missing_id)
+            start_p = master_toc[missing_id] - 3  # Buffer mundur
+            end_p = master_toc[ordered_ids[idx+1]] + 2 if idx + 1 < len(ordered_ids) else total_pages
+            
+            rescued_rule = rescue_scan(doc, missing_id, start_p, end_p)
+            if rescued_rule:
+                rescued_results.append(rescued_rule)
+
+    doc.close()
+    
+    # Kumpulkan Semua Data
+    all_results = results + rescued_results
+    
+    # Pembersihan via Polars
+    df = pl.DataFrame([{k: clean_fast(v) if isinstance(v, list) else v for k, v in r.items() if k != "current_key"} for r in all_results])
+    df_final = df.unique(subset=["Rule ID"]).sort("Rule ID")
+    
+    # FINAL INTEGRITY CHECK
+    final_extracted_ids = set(df_final["Rule ID"].to_list())
+    final_missing = [rid for rid in ordered_ids if rid not in final_extracted_ids]
+    status_integrity = "COMPLETE" if not final_missing else "INCOMPLETE"
+    
+    return df_final, status_integrity, final_missing
+
+# --- STREAMLIT UI ---
+def main():
+    st.set_page_config(page_title="Titan CIS Extractor (Optimus Build)", layout="wide")
+    st.title("🛡️ Titan Engine: Optimus Build")
+    st.markdown("Dilengkapi dengan **Anti-Gap Logic**, **Recursive Rescanning**, dan **Integrity Validation**.")
 
     with st.sidebar:
-        st.header("Control Center")
-        st.success("Checkpoint: Titan 8.7")
-        st.divider()
-        if st.button("Reset Cache"):
-            st.session_state.clear()
-            st.rerun()
+        st.header("Konfigurasi Sistem")
+        cores = st.slider("CPU Cores (Parallelism)", 1, os.cpu_count(), 4)
+        st.info(f"Hardware dialokasikan: {cores} Cores.")
 
     uploaded_file = st.file_uploader("Upload CIS Benchmark PDF", type="pdf")
 
-    if uploaded_file:
-        if st.button("🚀 RUN PREDATOR ENGINE", type="primary", width="stretch"):
-            start_t = time.time()
-            with st.status("Engine is hunting... 🎯", expanded=True):
-                data = predator_engine(uploaded_file.read())
-                if data:
-                    st.session_state['data'] = pd.DataFrame(data)
-                    st.session_state['speed'] = time.time() - start_t
-                else:
-                    st.error("Daftar Isi tidak ditemukan.")
-
-    if 'data' in st.session_state:
-        df = st.session_state['data']
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.read()
         
-        # Metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Rules", len(df))
-        m2.metric("L1 Controls", len(df[df['Level'].str.contains('L1|Level 1', case=False, na=False)]))
-        m3.metric("L2 Controls", len(df[df['Level'].str.contains('L2|Level 2', case=False, na=False)]))
-        m4.metric("Engine Speed", f"{st.session_state['speed']:.2f}s")
-
-        tab_data, tab_viz, tab_export = st.tabs(["🔍 Data Explorer", "📊 Analytics", "📥 Export Result"])
-
-        with tab_data:
-            search = st.text_input("Global Search:", "")
-            display_df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)] if search else df
-            st.dataframe(display_df, width="stretch")
-
-        with tab_viz:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(px.pie(df, names='Level', hole=0.4, title="Control Levels"), width="stretch")
-            with c2:
-                df['Cat'] = df['Rule ID'].str.split('.').str[0]
-                st.plotly_chart(px.bar(df.groupby('Cat').size().reset_index(name='Count'), x='Cat', y='Count', title="Rules by Category"), width="stretch")
-
-        with tab_export:
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name='Audit_Checklist')
-            st.download_button("📥 Download Master Excel", output.getvalue(), "CIS_Audit_Checklist.xlsx", width="stretch")
+        if st.button("🚀 Start Extraction with Anti-Gap Logic", type="primary"):
+            with st.status("Engine Menginisialisasi...", expanded=True) as status:
+                status_placeholder = st.empty()
+                df_result, integrity, missing = run_titan_engine(file_bytes, cores, status_placeholder)
+                
+                if df_result is not None:
+                    if integrity == "COMPLETE":
+                        status.update(label="Validasi Berhasil: 100% Sequence Lengkap!", state="complete", expanded=False)
+                        st.success(f"Berhasil mengekstrak seluruh {len(df_result)} rules tanpa gap.")
+                    else:
+                        status.update(label=f"Peringatan: Ekstraksi Selesai dengan Status INCOMPLETE", state="warning", expanded=True)
+                        st.warning(f"Berhasil mengekstrak {len(df_result)} rules. Namun, {len(missing)} rules masih gagal dipulihkan setelah rescanning.")
+                        st.error(f"Missing Sections List (Needs Manual Review): {', '.join(missing)}")
+                    
+                    st.dataframe(df_result.to_pandas(), use_container_width=True)
+                    
+                    # Export Data
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        df_result.to_pandas().to_excel(writer, index=False, sheet_name='CIS_Results')
+                    
+                    st.download_button(
+                        label="📥 Download Excel Result",
+                        data=output.getvalue(),
+                        file_name=f"TITAN_OPTIMUS_{uploaded_file.name.replace('.pdf', '.xlsx')}",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    status.update(label="Kegagalan Sistem Parsing", state="error")
+                    st.error("Daftar Isi tidak ditemukan atau format PDF rusak.")
 
 if __name__ == "__main__":
     main()
