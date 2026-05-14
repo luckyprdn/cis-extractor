@@ -1,6 +1,3 @@
-# 1. INSTALL DEPENDENCIES
-!pip install pymupdf polars xlsxwriter -q
-
 import fitz
 import pandas as pd
 import re
