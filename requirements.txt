@@ -1,8 +1,5 @@
-streamlit
-pymupdf
-polars
-pandas
-xlsxwriter
-plotly
-wordcloud
-matplotlib
+streamlit>=1.32.0
+pandas>=2.0.0
+pymupdf>=1.23.0
+polars>=0.20.0
+xlsxwriter>=3.1.0
