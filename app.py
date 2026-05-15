@@ -5,7 +5,6 @@ import re
 import time
 import io
 import json
-import gc  # ⚡ PERFORMA: Garbage Collector
 import plotly.express as px
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Set, Tuple
@@ -125,45 +124,18 @@ class TitanBackend:
             final_rules[current_id] = ParseResult(current_id, **{k: (self._extract_level(v) if k=="level" else self._clean_text(v)) for k,v in tmp.items()}, found_on_page=toc_pages.get(current_id, -1))
             final_rules[current_id].priority = self._get_priority(final_rules[current_id].title, final_rules[current_id].description)
 
-        # ⚡ PERFORMA: Pembersihan Memori Agresif
         doc.close()
-        del doc
-        del cache
-        del full_content
-        gc.collect() 
-
         ids = sorted(final_rules.keys(), key=self._sort_key)
         return [asdict(final_rules[rid]) for rid in ids], {"toc_count": len(master_ids)}
 
 # =============================================================================
-# ⚡ PERFORMA UPGRADES: CACHING & BUFFERING
+# ⚡ PERFORMA UPGRADE: STREAMLIT CACHING ENGINE
 # =============================================================================
 @st.cache_data(show_spinner=False)
 def execute_titan_cacheable(file_bytes: bytes, filename: str):
+    """Menyimpan hasil ekstraksi ke memori RAM untuk kecepatan 0.01 detik pada file berulang."""
     engine = TitanBackend()
     return engine.process_pdf(file_bytes)
-
-@st.cache_data(show_spinner=False)
-def generate_export_buffers(data_list):
-    """⚡ PERFORMA: Lazy-load Generator Format Export di Background."""
-    # Konversi ke backend PyArrow untuk efisiensi RAM
-    try:
-        df = pd.DataFrame(data_list).convert_dtypes(dtype_backend="pyarrow")
-    except:
-        df = pd.DataFrame(data_list) # Fallback jika versi Pandas lama
-        
-    for col in df.columns: df[col] = df[col].apply(lambda x: str(x)[:32000] if isinstance(x, str) else x)
-    
-    # EXCEL
-    buffer_xlsx = io.BytesIO()
-    with pd.ExcelWriter(buffer_xlsx, engine='xlsxwriter', engine_kwargs={'options': {'strings_to_urls': False}}) as writer:
-        df.to_excel(writer, index=False, sheet_name='CIS_Rules')
-    
-    # CSV & JSON
-    csv_data = df.to_csv(index=False).encode('utf-8')
-    json_data = df.to_json(orient='records', indent=4)
-    
-    return buffer_xlsx.getvalue(), csv_data, json_data
 
 # =============================================================================
 # 2. UI FRAMEWORK & AESTHETIC DASHBOARD (GLOW & GLASSMORPHISM)
@@ -178,6 +150,7 @@ if "logs" not in st.session_state: st.session_state.logs = []
 def toggle_theme():
     st.session_state.theme = "Light" if st.session_state.theme == "Dark" else "Dark"
 
+# 🎨 AESTHETIC CSS INJECTION
 st.markdown(f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Fira+Code&display=swap');
@@ -191,28 +164,49 @@ st.markdown(f"""
         --border: {"rgba(0, 229, 255, 0.2)" if st.session_state.theme == "Dark" else "rgba(37, 99, 235, 0.2)"};
     }}
     
+    /* Global App Styling */
     .stApp {{
-        background-color: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-serif;
+        background-color: var(--bg);
+        color: var(--text);
+        font-family: 'Rajdhani', sans-serif;
         background-image: {"radial-gradient(circle at 50% 0%, #111827 0%, #0A0F1C 100%)" if st.session_state.theme == "Dark" else "none"};
     }}
     
+    /* Metrics Card & Glassmorphism */
     [data-testid="stMetricContainer"] {{
-        background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px;
-        padding: 20px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-        box-shadow: 0 8px 32px rgba(0,0,0,0.15); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }}
     [data-testid="stMetricContainer"]:hover {{
-        border-color: var(--primary); box-shadow: 0 0 20px rgba(0, 229, 255, 0.2); transform: translateY(-2px);
+        border-color: var(--primary);
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
+        transform: translateY(-2px);
     }}
     
+    /* Headers & Typography */
     h1, h2, h3 {{ font-family: 'Rajdhani', sans-serif; letter-spacing: 1px; }}
     
+    /* Sidebar Styling */
     [data-testid="stSidebar"] {{
         background-color: {"rgba(11, 15, 25, 0.95)" if st.session_state.theme == "Dark" else "#FFFFFF"};
         border-right: 1px solid var(--border);
     }}
     
-    .stButton>button {{ border-radius: 8px; transition: all 0.2s; font-weight: 600; letter-spacing: 0.5px; }}
+    /* Button Aesthetics */
+    .stButton>button {{
+        border-radius: 8px;
+        transition: all 0.2s;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }}
+    
+    /* Dataframe Adjustments */
     [data-testid="stDataFrame"] {{ border-radius: 10px; overflow: hidden; }}
 </style>
 """, unsafe_allow_html=True)
@@ -237,13 +231,13 @@ if nav == "DASHBOARD":
         c1.metric("LOADED FILES", len(st.session_state.db))
         c2.metric("RULES EXTRACTED", f"{total_rules:,}")
         c3.metric("INTEGRITY", "HIGH", delta="100%", delta_color="normal")
-        c4.metric("ENGINE STATUS", "HYPER-OPTIMIZED")
+        c4.metric("ENGINE STATUS", "OPTIMIZED")
         
         st.markdown("<br>", unsafe_allow_html=True)
         col_left, col_right = st.columns(2)
         
-        # ⚡ PERFORMA: List comprehension langsung buat gabungin data (lebih efisien)
-        all_data = [rule for f in st.session_state.db.values() for rule in f['data']]
+        all_data = []
+        for f in st.session_state.db.values(): all_data.extend(f['data'])
         combined_df = pd.DataFrame(all_data)
         
         with col_left:
@@ -267,10 +261,12 @@ elif nav == "UPLOAD CENTER":
     
     if files and st.button("🚀 EXECUTE TITAN ENGINE", type="primary", use_container_width=True):
         for f in files:
+            # Menggunakan st.status untuk animasi loading yang lebih estetik ala terminal
             with st.status(f"⚡ Ingesting {f.name}...", expanded=True) as status:
                 st.write("Initiating PyMuPDF stream...")
                 st.write("Extracting ground truth & executing regex...")
                 
+                # Pemanggilan fungsi ber-cache (Kecepatan Instan jika file sama)
                 res, report = execute_titan_cacheable(f.read(), f.name)
                 
                 st.session_state.db[f.name] = {"data": res, "report": report}
@@ -287,47 +283,24 @@ elif nav == "RULES VIEWER":
         st.warning("⚠️ Memori kosong. Upload file terlebih dahulu.")
     else:
         target = st.selectbox("Select Target Database", list(st.session_state.db.keys()))
+        df = pd.DataFrame(st.session_state.db[target]["data"])
         
-        # ⚡ PERFORMA: Isolasi area render dengan Streamlit Fragment (Anti Full-Page Reload)
-        # Jika Streamlit versi lu belum support @st.fragment, hapus baris decorator ini.
-        try:
-            @st.fragment
-            def render_interactive_table(target_key):
-                raw_data = st.session_state.db[target_key]["data"]
-                
-                # Gunakan PyArrow backend jika memungkinkan untuk efisiensi RAM rendering
-                try:
-                    df = pd.DataFrame(raw_data).convert_dtypes(dtype_backend="pyarrow")
-                except:
-                    df = pd.DataFrame(raw_data)
-                    
-                search = st.text_input("🔍 Quick Search (ID, Title, Priority...)", placeholder="Ketik keyword di sini...")
-                if search: 
-                    df = df[df.apply(lambda r: search.lower() in str(r.values).lower(), axis=1)]
-                
-                st.markdown(f"**Menampilkan {len(df)} rules.**")
-                st.dataframe(
-                    df, 
-                    use_container_width=True, 
-                    height=600,
-                    hide_index=True,
-                    column_config={
-                        "priority": st.column_config.TextColumn("Priority", help="Security Impact"),
-                        "found_on_page": st.column_config.NumberColumn("Page", format="%d")
-                    }
-                )
-            
-            # Panggil fragment function
-            render_interactive_table(target)
-            
-        except AttributeError:
-            # Fallback untuk Streamlit versi lama (Tanpa fragment)
-            df = pd.DataFrame(st.session_state.db[target]["data"])
-            search = st.text_input("🔍 Quick Search (ID, Title, Priority...)", placeholder="Ketik keyword di sini...")
-            if search: 
-                df = df[df.apply(lambda r: search.lower() in str(r.values).lower(), axis=1)]
-            st.markdown(f"**Menampilkan {len(df)} rules.**")
-            st.dataframe(df, use_container_width=True, height=600, hide_index=True)
+        search = st.text_input("🔍 Quick Search (ID, Title, Priority...)", placeholder="Ketik keyword di sini...")
+        if search: 
+            df = df[df.apply(lambda r: search.lower() in str(r.values).lower(), axis=1)]
+        
+        st.markdown(f"**Menampilkan {len(df)} rules.**")
+        # Menggunakan st.dataframe dengan optimasi UI
+        st.dataframe(
+            df, 
+            use_container_width=True, 
+            height=600,
+            hide_index=True,
+            column_config={
+                "priority": st.column_config.TextColumn("Priority", help="Security Impact"),
+                "found_on_page": st.column_config.NumberColumn("Page", format="%d")
+            }
+        )
 
 elif nav == "EXPORT CENTER":
     st.title("💾 MULTI-FORMAT EXPORT")
@@ -335,24 +308,31 @@ elif nav == "EXPORT CENTER":
         st.warning("⚠️ Tidak ada data untuk diekspor.")
     else:
         target = st.selectbox("Pilih Database untuk Diekspor", list(st.session_state.db.keys()))
+        df = pd.DataFrame(st.session_state.db[target]["data"])
         
-        # ⚡ PERFORMA: Lazy Loading Buffer untuk Mencegah UI Freeze
-        excel_buf, csv_buf, json_buf = generate_export_buffers(st.session_state.db[target]["data"])
+        for col in df.columns: df[col] = df[col].apply(lambda x: str(x)[:32000] if isinstance(x, str) else x)
         
         st.markdown("<br><br>### 📥 Select Output Format", unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         
         with c1:
-            st.download_button("📊 EXCEL WORKBOOK (.xlsx)", excel_buf, f"Titan_{target}.xlsx", use_container_width=True)
+            buffer_xlsx = io.BytesIO()
+            with pd.ExcelWriter(buffer_xlsx, engine='xlsxwriter', engine_kwargs={'options': {'strings_to_urls': False}}) as writer:
+                df.to_excel(writer, index=False, sheet_name='CIS_Rules')
+            st.download_button("📊 EXCEL WORKBOOK (.xlsx)", buffer_xlsx.getvalue(), f"Titan_{target}.xlsx", use_container_width=True)
+            
         with c2:
-            st.download_button("📄 RAW CSV (.csv)", csv_buf, f"Titan_{target}.csv", "text/csv", use_container_width=True)
+            csv_data = df.to_csv(index=False).encode('utf-8')
+            st.download_button("📄 RAW CSV (.csv)", csv_data, f"Titan_{target}.csv", "text/csv", use_container_width=True)
+            
         with c3:
-            st.download_button("📦 JSON PAYLOAD (.json)", json_buf, f"Titan_{target}.json", "application/json", use_container_width=True)
+            json_data = df.to_json(orient='records', indent=4)
+            st.download_button("📦 JSON PAYLOAD (.json)", json_data, f"Titan_{target}.json", "application/json", use_container_width=True)
 
 elif nav == "LOGS":
     st.title("💻 SYSTEM CONSOLE")
     log_str = "\n".join(st.session_state.logs[::-1]) if st.session_state.logs else "Awaiting tasks...\nEngine idling at 0% load."
     st.code(log_str, language="bash")
 
-# FOOTER
-st.markdown('<div style="position: fixed; bottom: 10px; right: 20px; opacity: 0.3; font-family: \'Fira Code\', monospace; font-size: 11px;">TITAN PRO 5.3 // HYPER-OPTIMIZED</div>', unsafe_allow_html=True)
+# FOOTER MURNI ESTETIKA
+st.markdown('<div style="position: fixed; bottom: 10px; right: 20px; opacity: 0.3; font-family: \'Fira Code\', monospace; font-size: 11px;">TITAN PRO 5.3 // AUTHORIZED ACCESS ONLY</div>', unsafe_allow_html=True)
