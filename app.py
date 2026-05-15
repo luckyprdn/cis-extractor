@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import fitz  # PyMuPDF
+import pypdfium2 as pdfium  # ⚡ PERFORMA: Chrome Engine
 import re
 import time
 import io
 import json
-import gc  # ⚡ PERFORMA: Garbage Collector
+import gc  
 import plotly.express as px
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Set, Tuple
@@ -72,9 +72,15 @@ class TitanBackend:
         except: return [0]
 
     def process_pdf(self, pdf_bytes: bytes) -> Tuple[List[dict], dict]:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        cache = [self.RE_NOISE.sub("", page.get_text("text")) for page in doc]
-        
+        # ⚡ ENGINE SWAP: PyPdfium2
+        doc = pdfium.PdfDocument(pdf_bytes)
+        cache = []
+        for i in range(len(doc)):
+            page = doc[i]
+            textpage = page.get_textpage()
+            text = textpage.get_text_range()
+            cache.append(self.RE_NOISE.sub("", text))
+            
         toc_pages = {}
         master_ids = []
         in_app = False
@@ -125,7 +131,6 @@ class TitanBackend:
             final_rules[current_id] = ParseResult(current_id, **{k: (self._extract_level(v) if k=="level" else self._clean_text(v)) for k,v in tmp.items()}, found_on_page=toc_pages.get(current_id, -1))
             final_rules[current_id].priority = self._get_priority(final_rules[current_id].title, final_rules[current_id].description)
 
-        # ⚡ PERFORMA: Pembersihan Memori Agresif
         doc.close()
         del doc
         del cache
@@ -145,12 +150,10 @@ def execute_titan_cacheable(file_bytes: bytes, filename: str):
 
 @st.cache_data(show_spinner=False)
 def generate_export_buffers(data_list):
-    """⚡ PERFORMA: Lazy-load Generator Format Export di Background."""
-    # Konversi ke backend PyArrow untuk efisiensi RAM
     try:
         df = pd.DataFrame(data_list).convert_dtypes(dtype_backend="pyarrow")
     except:
-        df = pd.DataFrame(data_list) # Fallback jika versi Pandas lama
+        df = pd.DataFrame(data_list)
         
     for col in df.columns: df[col] = df[col].apply(lambda x: str(x)[:32000] if isinstance(x, str) else x)
     
@@ -158,15 +161,19 @@ def generate_export_buffers(data_list):
     buffer_xlsx = io.BytesIO()
     with pd.ExcelWriter(buffer_xlsx, engine='xlsxwriter', engine_kwargs={'options': {'strings_to_urls': False}}) as writer:
         df.to_excel(writer, index=False, sheet_name='CIS_Rules')
+        
+    # ⚡ NEW: PARQUET
+    buffer_parquet = io.BytesIO()
+    df.to_parquet(buffer_parquet, index=False, engine='pyarrow')
     
     # CSV & JSON
     csv_data = df.to_csv(index=False).encode('utf-8')
     json_data = df.to_json(orient='records', indent=4)
     
-    return buffer_xlsx.getvalue(), csv_data, json_data
+    return buffer_xlsx.getvalue(), csv_data, json_data, buffer_parquet.getvalue()
 
 # =============================================================================
-# 2. UI FRAMEWORK & AESTHETIC DASHBOARD (GLOW & GLASSMORPHISM)
+# 2. UI FRAMEWORK & AESTHETIC DASHBOARD
 # =============================================================================
 
 st.set_page_config(page_title="TITAN PRO 5.3", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
@@ -242,7 +249,6 @@ if nav == "DASHBOARD":
         st.markdown("<br>", unsafe_allow_html=True)
         col_left, col_right = st.columns(2)
         
-        # ⚡ PERFORMA: List comprehension langsung buat gabungin data (lebih efisien)
         all_data = [rule for f in st.session_state.db.values() for rule in f['data']]
         combined_df = pd.DataFrame(all_data)
         
@@ -268,7 +274,7 @@ elif nav == "UPLOAD CENTER":
     if files and st.button("🚀 EXECUTE TITAN ENGINE", type="primary", use_container_width=True):
         for f in files:
             with st.status(f"⚡ Ingesting {f.name}...", expanded=True) as status:
-                st.write("Initiating PyMuPDF stream...")
+                st.write("Initiating PyPdfium2 stream...")
                 st.write("Extracting ground truth & executing regex...")
                 
                 res, report = execute_titan_cacheable(f.read(), f.name)
@@ -288,14 +294,10 @@ elif nav == "RULES VIEWER":
     else:
         target = st.selectbox("Select Target Database", list(st.session_state.db.keys()))
         
-        # ⚡ PERFORMA: Isolasi area render dengan Streamlit Fragment (Anti Full-Page Reload)
-        # Jika Streamlit versi lu belum support @st.fragment, hapus baris decorator ini.
         try:
             @st.fragment
             def render_interactive_table(target_key):
                 raw_data = st.session_state.db[target_key]["data"]
-                
-                # Gunakan PyArrow backend jika memungkinkan untuk efisiensi RAM rendering
                 try:
                     df = pd.DataFrame(raw_data).convert_dtypes(dtype_backend="pyarrow")
                 except:
@@ -317,11 +319,9 @@ elif nav == "RULES VIEWER":
                     }
                 )
             
-            # Panggil fragment function
             render_interactive_table(target)
             
         except AttributeError:
-            # Fallback untuk Streamlit versi lama (Tanpa fragment)
             df = pd.DataFrame(st.session_state.db[target]["data"])
             search = st.text_input("🔍 Quick Search (ID, Title, Priority...)", placeholder="Ketik keyword di sini...")
             if search: 
@@ -336,18 +336,20 @@ elif nav == "EXPORT CENTER":
     else:
         target = st.selectbox("Pilih Database untuk Diekspor", list(st.session_state.db.keys()))
         
-        # ⚡ PERFORMA: Lazy Loading Buffer untuk Mencegah UI Freeze
-        excel_buf, csv_buf, json_buf = generate_export_buffers(st.session_state.db[target]["data"])
+        # Ekstrak semua buffer dari memory cache
+        excel_buf, csv_buf, json_buf, parquet_buf = generate_export_buffers(st.session_state.db[target]["data"])
         
         st.markdown("<br><br>### 📥 Select Output Format", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         
         with c1:
-            st.download_button("📊 EXCEL WORKBOOK (.xlsx)", excel_buf, f"Titan_{target}.xlsx", use_container_width=True)
+            st.download_button("📊 EXCEL (.xlsx)", excel_buf, f"Titan_{target}.xlsx", use_container_width=True)
         with c2:
-            st.download_button("📄 RAW CSV (.csv)", csv_buf, f"Titan_{target}.csv", "text/csv", use_container_width=True)
+            st.download_button("📄 CSV (.csv)", csv_buf, f"Titan_{target}.csv", "text/csv", use_container_width=True)
         with c3:
-            st.download_button("📦 JSON PAYLOAD (.json)", json_buf, f"Titan_{target}.json", "application/json", use_container_width=True)
+            st.download_button("📦 JSON (.json)", json_buf, f"Titan_{target}.json", "application/json", use_container_width=True)
+        with c4:
+            st.download_button("🗜️ PARQUET (.parquet)", parquet_buf, f"Titan_{target}.parquet", "application/octet-stream", use_container_width=True)
 
 elif nav == "LOGS":
     st.title("💻 SYSTEM CONSOLE")
