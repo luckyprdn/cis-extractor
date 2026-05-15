@@ -12,3 +12,5 @@ plotly>=5.18.0
 
 # Export Engines
 xlsxwriter>=3.1.0
+
+pypdfium2
