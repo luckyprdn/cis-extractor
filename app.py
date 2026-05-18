@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import fitz  # ⚡ Menggunakan PyMuPDF
+import fitz  # ⚡ Menggunakan PyMuPDF (Performa Maksimal)
 import re
 import time
 import io
@@ -28,12 +28,6 @@ if "compact_mode" not in st.session_state: st.session_state.compact_mode = False
 if "perf_mode" not in st.session_state: st.session_state.perf_mode = "Balanced"
 if "db" not in st.session_state: st.session_state.db = {}
 if "logs" not in st.session_state: st.session_state.logs = []
-if "metrics" not in st.session_state: st.session_state.metrics = {
-    "total_time": 0.0,
-    "total_pages": 0,
-    "success_rate": 100.0,
-    "confidence": 98.5
-}
 
 def log_event(module: str, msg: str, level: str = "INFO"):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -47,7 +41,6 @@ def apply_theme():
     is_dark = st.session_state.theme == "Dark"
     is_compact = st.session_state.compact_mode
     
-    # Color Palette
     bg_color = "#070B14" if is_dark else "#F1F5F9"
     panel_bg = "rgba(13, 20, 36, 0.7)" if is_dark else "rgba(255, 255, 255, 0.8)"
     text_color = "#E2E8F0" if is_dark else "#1E293B"
@@ -60,7 +53,6 @@ def apply_theme():
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
         
-        /* Base Environment */
         .stApp {{
             background-color: {bg_color};
             background-image: 
@@ -70,11 +62,9 @@ def apply_theme():
             font-family: 'Rajdhani', sans-serif;
         }}
 
-        /* Typography */
         h1, h2, h3 {{ font-family: 'Rajdhani', sans-serif; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: {primary_glow}; text-shadow: 0 0 10px rgba(0,229,255,0.3); }}
         p, span, div {{ font-family: 'Rajdhani', sans-serif; font-size: 1.05rem; }}
         
-        /* Glassmorphism Panels */
         .glass-panel {{
             background: {panel_bg};
             backdrop-filter: blur(12px);
@@ -87,7 +77,6 @@ def apply_theme():
         }}
         .glass-panel:hover {{ border-color: rgba(0, 229, 255, 0.5); box-shadow: 0 0 15px rgba(0,229,255,0.15); }}
         
-        /* Streamlit Element Overrides */
         [data-testid="stSidebar"] {{
             background: rgba(7, 11, 20, 0.95) !important;
             border-right: 1px solid {border_color};
@@ -104,7 +93,6 @@ def apply_theme():
         }}
         [data-testid="stMetricValue"] {{ font-family: 'Fira Code', monospace; color: {primary_glow}; text-shadow: 0 0 8px rgba(0,229,255,0.4); }}
         
-        /* Terminal / Logs */
         .terminal-box {{
             background-color: #05080F;
             border: 1px solid #1E2D4A;
@@ -119,7 +107,6 @@ def apply_theme():
         }}
         .terminal-box b {{ color: #00E5FF; }}
         
-        /* Buttons */
         .stButton>button {{
             background: transparent;
             border: 1px solid {primary_glow};
@@ -137,7 +124,6 @@ def apply_theme():
             color: #fff;
         }}
         
-        /* Watermark */
         .watermark {{
             position: fixed;
             bottom: 10px;
@@ -151,7 +137,6 @@ def apply_theme():
             letter-spacing: 2px;
         }}
         
-        /* Dataframes */
         [data-testid="stDataFrame"] {{ font-family: 'Fira Code', monospace; font-size: 0.9rem; }}
         
     </style>
@@ -160,7 +145,7 @@ def apply_theme():
     st.markdown(custom_css, unsafe_allow_html=True)
 
 # =============================================================================
-# 3. HYPER-EFFICIENT CORE ENGINE: TITAN PRO 5.5 (PyMuPDF Edition)
+# 3. HYPER-EFFICIENT CORE ENGINE: TITAN PRO 5.6 (PyMuPDF Edition)
 # =============================================================================
 @dataclass
 class ParseResult:
@@ -186,7 +171,6 @@ class TitanBackend:
             r'|Remediation(?:\s+Procedure)?|Default\s+Value|References):?\s*', re.IGNORECASE)
         self.RE_TOC = re.compile(r'^(\d+(?:\.\d+)+).*?(?:\.+)\s*(\d+)\s*$')
         self.RE_NOISE = re.compile(r'(Page\s+\d+|Internal\s+Only[^\n]*|P\s+a\s+g\s+e\s*\|\s*\d+)', re.IGNORECASE)
-        self.RE_LEVEL = re.compile(r'Level\s*(\d+)', re.IGNORECASE)
         self.RE_APPENDIX_START = re.compile(r'^(?:Appendix:\s*)?(?:Summary\s+Table|Recommendation\s+Summary|CIS\s+Controls\s+v\d+\s+IG\s+\d+\s+Mapped\s+Recommendations)', re.IGNORECASE)
         self.RE_APPENDIX_STOP = re.compile(r'^(?:Appendix:\s*)?Change History', re.IGNORECASE)
         self.RE_WHITESPACE = re.compile(r'\s+')
@@ -205,15 +189,32 @@ class TitanBackend:
         if any(x in t or x in d for x in ["audit", "logging", "monitoring", "banner", "message"]): return "Medium"
         return "Low"
 
-    def _clean_text(self, parts: List[str]) -> str:
+    def _clean_text(self, parts: List[str], section_key: str = "") -> str:
         if not parts: return "N/A"
-        raw = self.RE_NOISE.sub("", " ".join(parts))
-        return self.RE_WHITESPACE.sub(" ", raw).strip() or "N/A"
-
-    def _extract_level(self, parts: List[str]) -> str:
-        joined = " ".join(parts)
-        m = self.RE_LEVEL.search(joined)
-        return f"Level {m.group(1)}" if m else (joined.strip() or "N/A")
+        
+        # 1. Deduplikasi Baris (menghindari duplikasi string persis pada satu kolom)
+        seen = set()
+        unique_parts = []
+        for p in parts:
+            p_clean = p.strip()
+            if p_clean and p_clean.lower() not in seen:
+                seen.add(p_clean.lower())
+                unique_parts.append(p_clean)
+                
+        raw = self.RE_NOISE.sub("", " ".join(unique_parts))
+        
+        # 2. Filtrasi Referensi: Potong di "Additional Information" atau "CIS Controls"
+        if section_key == "references":
+            raw = re.split(r'(?i)(?:Additional\s+Information|CIS\s+Controls?)', raw)[0]
+            
+        text = self.RE_WHITESPACE.sub(" ", raw).strip()
+        
+        # 3. Deduplikasi Ekstrem: Jika sebuah blok di-scan dua kali persis (contoh: "Level 1 Level 1")
+        half = len(text) // 2
+        if text and len(text) > 4 and text[:half].strip().lower() == text[half:].strip().lower():
+            text = text[:half].strip()
+            
+        return text or "N/A"
 
     def _sort_key(self, rule_id: str) -> list:
         try: return [int(p) for p in rule_id.split(".")]
@@ -223,19 +224,14 @@ class TitanBackend:
         start_time = time.time()
         log_event("ENGINE", f"Initializing Titan Parser (PyMuPDF) for {filename}")
         
-        # ⚡ Menggunakan PyMuPDF (fitz) untuk performa tingkat tinggi
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         num_pages = len(doc)
-        
         log_event("OCR_CORE", f"Loaded document with {num_pages} pages")
         
         cache = []
         for page in doc:
             text = page.get_text()
-            if text:
-                cache.append(self.RE_NOISE.sub("", text))
-            else:
-                cache.append("")
+            cache.append(self.RE_NOISE.sub("", text) if text else "")
             
         toc_pages = {}
         master_ids = []
@@ -277,7 +273,7 @@ class TitanBackend:
                 if current_id:
                     final_rules[current_id] = ParseResult(
                         rule_id=current_id, 
-                        **{k: (self._extract_level(v) if k=="level" else self._clean_text(v)) for k,v in tmp.items()}, 
+                        **{k: self._clean_text(v, k) for k,v in tmp.items()}, 
                         found_on_page=toc_pages.get(current_id, -1)
                     )
                     final_rules[current_id].priority = self._get_priority(final_rules[current_id].title, final_rules[current_id].description)
@@ -298,7 +294,7 @@ class TitanBackend:
                 tmp[current_sec].append(line)
 
         if current_id:
-            final_rules[current_id] = ParseResult(current_id, **{k: (self._extract_level(v) if k=="level" else self._clean_text(v)) for k,v in tmp.items()}, found_on_page=toc_pages.get(current_id, -1))
+            final_rules[current_id] = ParseResult(current_id, **{k: self._clean_text(v, k) for k,v in tmp.items()}, found_on_page=toc_pages.get(current_id, -1))
             final_rules[current_id].priority = self._get_priority(final_rules[current_id].title, final_rules[current_id].description)
 
         doc.close()
@@ -344,7 +340,7 @@ with st.sidebar:
     st.markdown("""
         <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="font-size: 28px; margin: 0; color: #00E5FF; text-shadow: 0 0 15px #00E5FF;">🛡️ TITAN CORE</h1>
-            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.5 ENTERPRISE (PyMuPDF)</p>
+            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.6 ENTERPRISE (PyMuPDF)</p>
         </div>
     """, unsafe_allow_html=True)
     
@@ -362,7 +358,6 @@ with st.sidebar:
     selected_nav = st.radio("COMMAND PROTOCOLS", menus, label_visibility="collapsed")
     st.markdown("---")
     
-    # Quick Status
     st.markdown("<div style='font-family: Fira Code; font-size: 11px; color: #00E5FF;'>SYSTEM STATUS: ONLINE</div>", unsafe_allow_html=True)
     total_db = len(st.session_state.db)
     st.markdown(f"<div style='font-family: Fira Code; font-size: 11px; color: #A0AEC0;'>DATABASES LOADED: {total_db}</div>", unsafe_allow_html=True)
@@ -380,7 +375,6 @@ if nav == "Dashboard Analytics":
     if not st.session_state.db:
         st.info("⚡ System Standby. Proceed to Upload Center to ingest benchmark frameworks.")
     else:
-        # Aggregate stats
         total_files = len(st.session_state.db)
         total_rules = sum(len(f['data']) for f in st.session_state.db.values())
         total_pages = sum(f['report']['pages'] for f in st.session_state.db.values())
@@ -394,7 +388,6 @@ if nav == "Dashboard Analytics":
         
         st.markdown("### 📈 INTELLIGENCE OVERVIEW")
         
-        # Consolidate Data for Charts
         all_data = []
         for db_name, db_content in st.session_state.db.items():
             df_temp = pd.DataFrame(db_content['data'])
@@ -422,14 +415,16 @@ if nav == "Dashboard Analytics":
             
         with col_chart2:
             st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-            level_counts = merged_df['level'].value_counts().reset_index()
+            # Level data might be lengthy now, limit for charting readability
+            merged_df['level_short'] = merged_df['level'].apply(lambda x: str(x)[:40] + '...' if len(str(x)) > 40 else str(x))
+            level_counts = merged_df['level_short'].value_counts().reset_index()
             level_counts.columns = ['Level', 'Count']
             fig2 = px.bar(
-                level_counts, x='Level', y='Count',
+                level_counts.head(10), x='Level', y='Count',
                 color_discrete_sequence=["#00E5FF"]
             )
             fig2.update_layout(
-                title="Profile Applicability (Levels)",
+                title="Top Profile Applicability",
                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                 font=dict(family="Rajdhani", color="#E2E8F0"), margin=dict(t=40, b=0, l=0, r=0)
             )
@@ -444,7 +439,6 @@ elif nav == "Upload Center":
     files = st.file_uploader("INITIALIZE UPLOAD SEQUENCE (PDF)", type="pdf", accept_multiple_files=True)
     
     if files:
-        # Preview Section
         st.markdown("### 📋 STAGED FILES")
         for f in files:
             st.markdown(f"**{f.name}** - `{f.size / 1024 / 1024:.2f} MB`")
@@ -476,7 +470,6 @@ elif nav == "Extracted Rules":
         lvl_filter = fc2.multiselect("Filter by Level", options=df['level'].unique())
         pri_filter = fc3.multiselect("Filter by Severity", options=["Critical", "High", "Medium", "Low"])
         
-        # Apply filters
         if search_q: 
             df = df[df.apply(lambda r: search_q.lower() in str(r.values).lower(), axis=1)]
         if lvl_filter:
@@ -501,13 +494,35 @@ elif nav == "Comparison Engine":
             sets = {name: set(rule['rule_id'] for rule in st.session_state.db[name]['data']) for name in targets}
             common_ids = set.intersection(*sets.values())
             all_ids = sorted(list(set.union(*sets.values())), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0])
+            unique_ids = set(all_ids) - common_ids
             
             cc1, cc2, cc3 = st.columns(3)
             cc1.metric("Total Unique Rules Assessed", len(all_ids))
             cc2.metric("Common Intersections", len(common_ids))
             cc3.metric("Divergence Factor", f"{((len(all_ids) - len(common_ids)) / len(all_ids) * 100):.1f}%")
             
-            st.markdown("### MATRIX DIFF")
+            # --- COMMON RULES DATAFRAME ---
+            common_rows = []
+            for rid in sorted(list(common_ids), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0]):
+                row = {"Rule ID": rid}
+                for name in targets:
+                    rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
+                    row[name] = rule['title'] if rule else "N/A"
+                common_rows.append(row)
+            df_common = pd.DataFrame(common_rows)
+            
+            # --- UNIQUE / DIVERGENT RULES DATAFRAME ---
+            unique_rows = []
+            for rid in sorted(list(unique_ids), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0]):
+                row = {"Rule ID": rid}
+                for name in targets:
+                    rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
+                    row[name] = rule['title'] if rule else "❌ MISSING"
+                unique_rows.append(row)
+            df_unique = pd.DataFrame(unique_rows)
+            
+            # --- DISPLAY MATRICES ---
+            st.markdown("### MATRIX DIFF (ALL ASSESSED RULES)")
             
             comp_rows = []
             for rid in all_ids:
@@ -524,6 +539,19 @@ elif nav == "Comparison Engine":
                 return f'color: {color}'
             
             st.dataframe(comp_df.style.map(color_missing), use_container_width=True, hide_index=True)
+            
+            # --- EXPORT BUTTONS ---
+            st.markdown("### 💾 EXPORT COMPARISON ARTIFACTS")
+            col_exp1, col_exp2 = st.columns(2)
+            
+            xb_common = io.BytesIO()
+            with pd.ExcelWriter(xb_common, engine='xlsxwriter') as writer: df_common.to_excel(writer, index=False)
+            col_exp1.download_button("📥 DOWNLOAD COMMON RULES (EXCEL)", xb_common.getvalue(), "Titan_Common_Rules.xlsx", use_container_width=True)
+            
+            xb_unique = io.BytesIO()
+            with pd.ExcelWriter(xb_unique, engine='xlsxwriter') as writer: df_unique.to_excel(writer, index=False)
+            col_exp2.download_button("📥 DOWNLOAD UNIQUE RULES (EXCEL)", xb_unique.getvalue(), "Titan_Unique_Rules.xlsx", use_container_width=True)
+            
             st.markdown("</div>", unsafe_allow_html=True)
 
 # --- INTEGRITY VALIDATOR ---
@@ -536,12 +564,10 @@ elif nav == "Integrity Validator":
         df = pd.DataFrame(st.session_state.db[target]["data"])
         report = st.session_state.db[target]["report"]
         
-        # Analyze integrity
         duplicates = df[df.duplicated(subset=['rule_id'], keep=False)]
         
         def check_numbering_gaps(ids):
             gaps = []
-            # Simplified heuristic: group by prefix
             grouped = {}
             for rid in ids:
                 parts = rid.split(".")
@@ -593,7 +619,6 @@ elif nav == "Export Center":
         target = st.selectbox("SELECT EXPORT PAYLOAD", list(st.session_state.db.keys()))
         df = pd.DataFrame(st.session_state.db[target]["data"])
         
-        # Pre-process DataFrames for export constraints
         for col in df.columns: 
             df[col] = df[col].apply(lambda x: str(x)[:32000] if isinstance(x, str) else x)
             
@@ -602,21 +627,17 @@ elif nav == "Export Center":
         
         ec1, ec2, ec3, ec4 = st.columns(4)
         
-        # 1. CSV
         csv_data = df.to_csv(index=False).encode('utf-8')
         ec1.download_button("📄 EXPORT CSV", csv_data, f"Titan_{target}.csv", "text/csv", use_container_width=True)
         
-        # 2. JSON
         json_data = df.to_json(orient='records', indent=4)
         ec2.download_button("📦 EXPORT JSON", json_data, f"Titan_{target}.json", "application/json", use_container_width=True)
         
-        # 3. EXCEL
         xb = io.BytesIO()
         with pd.ExcelWriter(xb, engine='xlsxwriter', engine_kwargs={'options': {'strings_to_urls': False}}) as writer:
             df.to_excel(writer, index=False, sheet_name='CIS_Rules')
         ec3.download_button("📊 EXPORT EXCEL", xb.getvalue(), f"Titan_{target}.xlsx", "application/vnd.ms-excel", use_container_width=True)
         
-        # 4. MARKDOWN
         md_data = generate_markdown(df).encode('utf-8')
         ec4.download_button("📝 EXPORT MARKDOWN", md_data, f"Titan_{target}.md", "text/markdown", use_container_width=True)
         
