@@ -26,7 +26,8 @@ if "theme" not in st.session_state: st.session_state.theme = "Dark"
 if "animations" not in st.session_state: st.session_state.animations = True
 if "compact_mode" not in st.session_state: st.session_state.compact_mode = False
 if "perf_mode" not in st.session_state: st.session_state.perf_mode = "Balanced"
-if "db" not in st.session_state: st.session_state.db = {}
+if "db" not in st.session_state: st.session_state.db = {}  # CIS DB
+if "baseline_db" not in st.session_state: st.session_state.baseline_db = {}  # Company Baseline DB
 if "logs" not in st.session_state: st.session_state.logs = []
 
 def log_event(module: str, msg: str, level: str = "INFO"):
@@ -63,7 +64,7 @@ def apply_theme():
         }}
 
         h1, h2, h3 {{ font-family: 'Rajdhani', sans-serif; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: {primary_glow}; text-shadow: 0 0 10px rgba(0,229,255,0.3); }}
-        p, span, div {{ font-family: 'Rajdhani', sans-serif; font-size: 1.05rem; }}
+        p, span, div, li {{ font-family: 'Rajdhani', sans-serif; font-size: 1.05rem; }}
         
         .glass-panel {{
             background: {panel_bg};
@@ -144,14 +145,14 @@ def apply_theme():
     </style>
     
     <div class="watermark">
-        <b>TITAN CIS EXTRACTOR // ENGINE 5.6</b><br>
+        <b>TITAN CIS EXTRACTOR // ENGINE 5.7</b><br>
         &copy; 2026 LUCKY PRADANA. ALL RIGHTS RESERVED.
     </div>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
 # =============================================================================
-# 3. HYPER-EFFICIENT CORE ENGINE: TITAN PRO 5.6 (PyMuPDF Edition)
+# 3. HYPER-EFFICIENT CORE ENGINES
 # =============================================================================
 @dataclass
 class ParseResult:
@@ -169,6 +170,7 @@ class ParseResult:
     found_on_page: int = -1
 
 class TitanBackend:
+    """ Engine khusus untuk dokumen official CIS Benchmark (Struktur baku) """
     def __init__(self):
         self.RE_RULE_EXACT = re.compile(r'^(\d+(?:\.\d+)+)\s+(.+)', re.IGNORECASE)
         self.RE_SECTION = re.compile(
@@ -207,16 +209,13 @@ class TitanBackend:
                 unique_parts.append(p_clean)
                 
         raw = self.RE_NOISE.sub("", " ".join(unique_parts))
-        
         if section_key == "references":
             raw = re.split(r'(?i)(?:Additional\s+Information|CIS\s+Controls?)', raw)[0]
             
         text = self.RE_WHITESPACE.sub(" ", raw).strip()
-        
         half = len(text) // 2
         if text and len(text) > 4 and text[:half].strip().lower() == text[half:].strip().lower():
             text = text[:half].strip()
-            
         return text or "N/A"
 
     def _sort_key(self, rule_id: str) -> list:
@@ -225,7 +224,7 @@ class TitanBackend:
 
     def process_pdf(self, pdf_bytes: bytes, filename: str) -> Tuple[List[dict], dict]:
         start_time = time.time()
-        log_event("ENGINE", f"Initializing Titan Parser (PyMuPDF) for {filename}")
+        log_event("CIS_ENGINE", f"Initializing Titan Parser for {filename}")
         
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         num_pages = len(doc)
@@ -240,7 +239,6 @@ class TitanBackend:
         master_ids = []
         in_app = False
         
-        log_event("ENGINE", "Scanning TOC and Appendices...")
         for pg in cache:
             for line in pg.split("\n"):
                 line = line.strip()
@@ -256,9 +254,8 @@ class TitanBackend:
         master_ids = list(dict.fromkeys(master_ids))
         if not master_ids: 
             master_ids = [rid for rid in toc_pages if rid.count(".") >= 1]
-            log_event("WARN", "Appendix missing. Falling back to TOC extraction.", "WARN")
-        
         master_set = set(master_ids)
+        
         final_rules = {}
         current_id, current_sec = None, "title"
         tmp = {k: [] for k in ["title", "level", "description", "rationale", "impact", "audit", "remediation", "default_value", "references"]}
@@ -266,7 +263,6 @@ class TitanBackend:
         def _iter_lines(text_cache):
             for page_text in text_cache: yield from page_text.split("\n")
 
-        log_event("ENGINE", "Extracting rule parameters...")
         for line in _iter_lines(cache):
             line = line.strip()
             if not line: continue
@@ -304,7 +300,7 @@ class TitanBackend:
         gc.collect() 
 
         exec_time = time.time() - start_time
-        log_event("SUCCESS", f"Extraction completed in {exec_time:.2f}s. Found {len(final_rules)} rules.", "SUCCESS")
+        log_event("SUCCESS", f"CIS Extraction completed in {exec_time:.2f}s. Found {len(final_rules)} rules.", "SUCCESS")
         
         ids = sorted(final_rules.keys(), key=self._sort_key)
         
@@ -318,9 +314,70 @@ class TitanBackend:
         
         return [asdict(final_rules[rid]) for rid in ids], report
 
+
+class BaselineBackend:
+    """ Engine khusus untuk Dokumen Standar Internal Perusahaan (Mengekstrak ID Referensi CIS) """
+    def __init__(self):
+        # Mencari pola angka yang mirip referensi CIS (contoh: 1.1, 1.2.3) di awal baris/teks
+        self.RE_RULE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.+)', re.IGNORECASE)
+        self.RE_NOISE = re.compile(r'(Page\s+\d+|Internal\s+Only[^\n]*|P\s+a\s+g\s+e\s*\|\s*\d+|DOKUMEN\s+STANDAR|Halaman.*)', re.IGNORECASE)
+
+    def process_pdf(self, pdf_bytes: bytes, filename: str) -> Tuple[List[dict], dict]:
+        start_time = time.time()
+        log_event("BASELINE_ENGINE", f"Initializing Company Baseline Parser for {filename}")
+        
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        num_pages = len(doc)
+        
+        baseline_rules = {}
+        
+        for page in doc:
+            # Gunakan mode 'blocks' untuk mempertahankan logika baris tabel
+            blocks = page.get_text("blocks")
+            for b in blocks:
+                text = b[4].strip()
+                text = self.RE_NOISE.sub("", text).strip()
+                if not text: continue
+                
+                # Coba pecah per baris jika block gabungan
+                lines = text.split('\n')
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    m = self.RE_RULE.match(line)
+                    if m:
+                        rule_id = m.group(1)
+                        # Sisa baris atau block bisa jadi nama parameternya
+                        # Ambil teks setelah ID sebagai title sementara
+                        title_raw = m.group(2).strip()
+                        # Jika tidak ada di baris yang sama, coba baris berikutnya
+                        if not title_raw and (i + 1) < len(lines):
+                            title_raw = lines[i+1].strip()
+                        
+                        # Simpan ke baseline rules
+                        if rule_id not in baseline_rules:
+                            baseline_rules[rule_id] = {
+                                "rule_id": rule_id,
+                                "baseline_title": title_raw,
+                                "status": "Implemented in Baseline"
+                            }
+
+        doc.close()
+        gc.collect()
+        
+        exec_time = time.time() - start_time
+        log_event("SUCCESS", f"Baseline Extraction completed. Found {len(baseline_rules)} standard controls.", "SUCCESS")
+        
+        sorted_ids = sorted(baseline_rules.keys(), key=lambda x: [int(p) for p in x.split(".") if p.isdigit()] )
+        return [baseline_rules[rid] for rid in sorted_ids], {"pages": num_pages, "extracted": len(baseline_rules), "exec_time": exec_time}
+
 @st.cache_data(show_spinner=False)
 def execute_titan_cacheable(file_bytes, filename):
     engine = TitanBackend()
+    return engine.process_pdf(file_bytes, filename)
+
+@st.cache_data(show_spinner=False)
+def execute_baseline_cacheable(file_bytes, filename):
+    engine = BaselineBackend()
     return engine.process_pdf(file_bytes, filename)
 
 def generate_markdown(df: pd.DataFrame) -> str:
@@ -343,7 +400,7 @@ with st.sidebar:
     st.markdown("""
         <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="font-size: 28px; margin: 0; color: #00E5FF; text-shadow: 0 0 15px #00E5FF;">🛡️ TITAN CORE</h1>
-            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.6 ENTERPRISE</p>
+            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.7 ENTERPRISE</p>
         </div>
     """, unsafe_allow_html=True)
     
@@ -362,8 +419,8 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown("<div style='font-family: Fira Code; font-size: 11px; color: #00E5FF;'>SYSTEM STATUS: ONLINE</div>", unsafe_allow_html=True)
-    total_db = len(st.session_state.db)
-    st.markdown(f"<div style='font-family: Fira Code; font-size: 11px; color: #A0AEC0;'>DATABASES LOADED: {total_db}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-family: Fira Code; font-size: 11px; color: #A0AEC0;'>CIS DB LOADED: {len(st.session_state.db)}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-family: Fira Code; font-size: 11px; color: #A0AEC0;'>BASELINE DB: {len(st.session_state.baseline_db)}</div>", unsafe_allow_html=True)
     
     # Sidebar Copyright Footer
     st.markdown("<br><br><br>", unsafe_allow_html=True)
@@ -392,9 +449,9 @@ if nav == "Dashboard Analytics":
         avg_success = sum(f['report']['success_rate'] for f in st.session_state.db.values()) / total_files
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("LOADED FRAMEWORKS", total_files)
+        c1.metric("CIS FRAMEWORKS", total_files)
         c2.metric("RULES EXTRACTED", f"{total_rules:,}")
-        c3.metric("PAGES PARSED", f"{total_pages:,}")
+        c3.metric("BASELINE DOCS", len(st.session_state.baseline_db))
         c4.metric("EXTRACTION CONFIDENCE", f"{avg_success:.1f}%")
         
         st.markdown("### 📈 INTELLIGENCE OVERVIEW")
@@ -444,124 +501,155 @@ if nav == "Dashboard Analytics":
 # --- UPLOAD CENTER ---
 elif nav == "Upload Center":
     st.title("☁️ SECURE INGESTION GATEWAY")
-    st.markdown("<div class='glass-panel'>Drop your CIS Benchmark PDF documents into the hyper-parser. Multiple files supported for bulk extraction and automated cross-analysis.</div><br>", unsafe_allow_html=True)
     
-    files = st.file_uploader("INITIALIZE UPLOAD SEQUENCE (PDF)", type="pdf", accept_multiple_files=True)
+    col_up1, col_up2 = st.columns(2)
     
-    if files:
-        st.markdown("### 📋 STAGED FILES")
-        for f in files:
-            st.markdown(f"**{f.name}** - `{f.size / 1024 / 1024:.2f} MB`")
-            
-        if st.button("🚀 EXECUTE TITAN ENGINE", type="primary", use_container_width=True):
+    with col_up1:
+        st.markdown("<div class='glass-panel'><h3>🛡️ OFFICIAL CIS BENCHMARK</h3>Upload CIS PDF framework documents. Format standar global.</div><br>", unsafe_allow_html=True)
+        cis_files = st.file_uploader("Upload CIS Benchmark (PDF)", type="pdf", accept_multiple_files=True, key="cis_up")
+        
+        if cis_files and st.button("🚀 EXECUTE CIS ENGINE", type="primary", use_container_width=True):
             progress_bar = st.progress(0)
-            for idx, f in enumerate(files):
-                with st.spinner(f"Initiating neural extraction on {f.name}..."):
+            for idx, f in enumerate(cis_files):
+                with st.spinner(f"Extracting CIS: {f.name}..."):
                     res, report = execute_titan_cacheable(f.read(), f.name)
                     st.session_state.db[f.name] = {"data": res, "report": report}
-                    progress_bar.progress((idx + 1) / len(files))
-            
-            st.toast("Extraction Sequence Complete!", icon="✅")
+                    progress_bar.progress((idx + 1) / len(cis_files))
+            st.toast("CIS Extraction Complete!", icon="✅")
+            st.rerun()
+
+    with col_up2:
+        st.markdown("<div class='glass-panel'><h3>🏢 COMPANY BASELINE DOC</h3>Upload Dokumen Standar Internal (PDF). Ekstraktor akan memetakan kontrol ke CIS ID.</div><br>", unsafe_allow_html=True)
+        base_files = st.file_uploader("Upload Internal Standard (PDF)", type="pdf", accept_multiple_files=True, key="base_up")
+        
+        if base_files and st.button("🚀 EXECUTE BASELINE EXTRACTOR", use_container_width=True):
+            progress_bar = st.progress(0)
+            for idx, f in enumerate(base_files):
+                with st.spinner(f"Extracting Baseline: {f.name}..."):
+                    res, report = execute_baseline_cacheable(f.read(), f.name)
+                    st.session_state.baseline_db[f.name] = {"data": res, "report": report}
+                    progress_bar.progress((idx + 1) / len(base_files))
+            st.toast("Baseline Extraction Complete!", icon="✅")
             st.rerun()
 
 # --- EXTRACTED RULES ---
 elif nav == "Extracted Rules":
     st.title("🔍 RULE EXPLORER")
-    if not st.session_state.db: 
-        st.warning("Database empty. Please ingest a benchmark document.")
-    else:
-        target = st.selectbox("SELECT ACTIVE DATABASE", list(st.session_state.db.keys()))
-        df = pd.DataFrame(st.session_state.db[target]["data"])
-        
-        st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-        fc1, fc2, fc3, fc4 = st.columns(4)
-        
-        search_q = fc1.text_input("🔍 Quick Search", placeholder="Regex / Text...")
-        lvl_filter = fc2.multiselect("Filter by Level", options=df['level'].unique())
-        pri_filter = fc3.multiselect("Filter by Severity", options=["Critical", "High", "Medium", "Low"])
-        
-        if search_q: 
-            df = df[df.apply(lambda r: search_q.lower() in str(r.values).lower(), axis=1)]
-        if lvl_filter:
-            df = df[df['level'].isin(lvl_filter)]
-        if pri_filter:
-            df = df[df['priority'].isin(pri_filter)]
+    tab1, tab2 = st.tabs(["🛡️ CIS BENCHMARKS", "🏢 COMPANY BASELINES"])
+    
+    with tab1:
+        if not st.session_state.db: 
+            st.warning("CIS Database empty.")
+        else:
+            target = st.selectbox("SELECT CIS DATABASE", list(st.session_state.db.keys()))
+            df = pd.DataFrame(st.session_state.db[target]["data"])
             
-        fc4.metric("Displaying Rules", len(df))
-        st.markdown("</div><br>", unsafe_allow_html=True)
-        
-        st.dataframe(df, use_container_width=True, height=600, hide_index=True)
+            st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
+            fc1, fc2, fc3, fc4 = st.columns(4)
+            search_q = fc1.text_input("🔍 Quick Search", placeholder="Regex / Text...")
+            lvl_filter = fc2.multiselect("Filter by Level", options=df['level'].unique())
+            pri_filter = fc3.multiselect("Filter by Severity", options=["Critical", "High", "Medium", "Low"])
+            
+            if search_q: df = df[df.apply(lambda r: search_q.lower() in str(r.values).lower(), axis=1)]
+            if lvl_filter: df = df[df['level'].isin(lvl_filter)]
+            if pri_filter: df = df[df['priority'].isin(pri_filter)]
+                
+            fc4.metric("Displaying Rules", len(df))
+            st.markdown("</div><br>", unsafe_allow_html=True)
+            st.dataframe(df, use_container_width=True, height=600, hide_index=True)
+            
+    with tab2:
+        if not st.session_state.baseline_db:
+            st.warning("Baseline Database empty.")
+        else:
+            target_base = st.selectbox("SELECT BASELINE DATABASE", list(st.session_state.baseline_db.keys()))
+            df_base = pd.DataFrame(st.session_state.baseline_db[target_base]["data"])
+            st.metric("Extracted Baseline Controls", len(df_base))
+            st.dataframe(df_base, use_container_width=True, height=600, hide_index=True)
 
 # --- COMPARISON ENGINE ---
 elif nav == "Comparison Engine":
-    st.title("⚖️ MULTI-FRAMEWORK COMPARISON")
-    if len(st.session_state.db) < 2:
-        st.warning("Comparison matrix requires at least two loaded frameworks.")
-    else:
-        targets = st.multiselect("SELECT FRAMEWORKS FOR COMPARISON", list(st.session_state.db.keys()), default=list(st.session_state.db.keys())[:2])
-        if len(targets) >= 2:
+    st.title("⚖️ CROSS-FRAMEWORK & AUDIT ENGINE")
+    
+    comp_tab1, comp_tab2 = st.tabs(["🔄 MULTI-CIS COMPARISON", "🚨 CIS vs COMPANY BASELINE AUDIT"])
+    
+    with comp_tab1:
+        if len(st.session_state.db) < 2:
+            st.warning("Requires at least 2 CIS frameworks for comparison.")
+        else:
+            targets = st.multiselect("SELECT CIS FRAMEWORKS", list(st.session_state.db.keys()), default=list(st.session_state.db.keys())[:2])
+            if len(targets) >= 2:
+                st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
+                sets = {name: set(rule['rule_id'] for rule in st.session_state.db[name]['data']) for name in targets}
+                common_ids = set.intersection(*sets.values())
+                all_ids = sorted(list(set.union(*sets.values())), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0])
+                unique_ids = set(all_ids) - common_ids
+                
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Total Unique Rules Assessed", len(all_ids))
+                cc2.metric("Common Intersections", len(common_ids))
+                cc3.metric("Divergence Factor", f"{((len(all_ids) - len(common_ids)) / len(all_ids) * 100):.1f}%")
+                
+                # --- MATRICES ---
+                st.markdown("### MATRIX DIFF (ALL ASSESSED RULES)")
+                comp_rows = []
+                for rid in all_ids:
+                    row = {"Rule ID": rid}
+                    for name in targets:
+                        rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
+                        row[name] = rule['title'] if rule else "❌ MISSING"
+                    comp_rows.append(row)
+                comp_df = pd.DataFrame(comp_rows)
+                
+                def color_missing(val): return f"color: {'#FF0033' if val == '❌ MISSING' else 'inherit'}"
+                st.dataframe(comp_df.style.map(color_missing), use_container_width=True, hide_index=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+                
+    with comp_tab2:
+        if not st.session_state.db or not st.session_state.baseline_db:
+            st.warning("Audit requires at least 1 CIS Benchmark AND 1 Company Baseline.")
+        else:
+            col_sel1, col_sel2 = st.columns(2)
+            sel_cis = col_sel1.selectbox("Select Target CIS Benchmark", list(st.session_state.db.keys()))
+            sel_base = col_sel2.selectbox("Select Company Baseline", list(st.session_state.baseline_db.keys()))
+            
+            cis_data = st.session_state.db[sel_cis]["data"]
+            base_data = st.session_state.baseline_db[sel_base]["data"]
+            
+            cis_ids = [r['rule_id'] for r in cis_data]
+            base_ids = [r['rule_id'] for r in base_data]
+            
+            covered = set(cis_ids).intersection(set(base_ids))
+            missing = set(cis_ids) - covered
+            coverage_pct = (len(covered) / len(cis_ids) * 100) if cis_ids else 0
+            
             st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-            sets = {name: set(rule['rule_id'] for rule in st.session_state.db[name]['data']) for name in targets}
-            common_ids = set.intersection(*sets.values())
-            all_ids = sorted(list(set.union(*sets.values())), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0])
-            unique_ids = set(all_ids) - common_ids
+            ac1, ac2, ac3 = st.columns(3)
+            ac1.metric("CIS Controls Target", len(cis_ids))
+            ac2.metric("Company Controls Mapped", len(covered))
+            ac3.metric("Baseline Compliance Coverage", f"{coverage_pct:.1f}%")
             
-            cc1, cc2, cc3 = st.columns(3)
-            cc1.metric("Total Unique Rules Assessed", len(all_ids))
-            cc2.metric("Common Intersections", len(common_ids))
-            cc3.metric("Divergence Factor", f"{((len(all_ids) - len(common_ids)) / len(all_ids) * 100):.1f}%")
+            st.markdown("### 📊 AUDIT GAP ANALYSIS")
+            audit_rows = []
+            for r in cis_data:
+                rid = r['rule_id']
+                base_match = next((b for b in base_data if b['rule_id'] == rid), None)
+                audit_rows.append({
+                    "CIS ID": rid,
+                    "CIS Requirement": r['title'],
+                    "Severity": r['priority'],
+                    "Baseline Status": "✅ COVERED" if base_match else "❌ MISSING IN BASELINE",
+                    "Baseline Parameter": base_match['baseline_title'] if base_match else "N/A"
+                })
             
-            # --- COMMON RULES DATAFRAME ---
-            common_rows = []
-            for rid in sorted(list(common_ids), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0]):
-                row = {"Rule ID": rid}
-                for name in targets:
-                    rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
-                    row[name] = rule['title'] if rule else "N/A"
-                common_rows.append(row)
-            df_common = pd.DataFrame(common_rows)
+            df_audit = pd.DataFrame(audit_rows)
+            def color_audit(val): return f"color: {'#00FF66' if '✅' in str(val) else '#FF0033' if '❌' in str(val) else 'inherit'}"
             
-            # --- UNIQUE / DIVERGENT RULES DATAFRAME ---
-            unique_rows = []
-            for rid in sorted(list(unique_ids), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0]):
-                row = {"Rule ID": rid}
-                for name in targets:
-                    rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
-                    row[name] = rule['title'] if rule else "❌ MISSING"
-                unique_rows.append(row)
-            df_unique = pd.DataFrame(unique_rows)
+            st.dataframe(df_audit.style.map(color_audit, subset=['Baseline Status']), use_container_width=True, hide_index=True)
             
-            # --- DISPLAY MATRICES ---
-            st.markdown("### MATRIX DIFF (ALL ASSESSED RULES)")
-            
-            comp_rows = []
-            for rid in all_ids:
-                row = {"Rule ID": rid}
-                for name in targets:
-                    rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
-                    row[name] = rule['title'] if rule else "❌ MISSING"
-                comp_rows.append(row)
-            
-            comp_df = pd.DataFrame(comp_rows)
-            
-            def color_missing(val):
-                color = '#FF0033' if val == '❌ MISSING' else 'inherit'
-                return f'color: {color}'
-            
-            st.dataframe(comp_df.style.map(color_missing), use_container_width=True, hide_index=True)
-            
-            # --- EXPORT BUTTONS ---
-            st.markdown("### 💾 EXPORT COMPARISON ARTIFACTS")
-            col_exp1, col_exp2 = st.columns(2)
-            
-            xb_common = io.BytesIO()
-            with pd.ExcelWriter(xb_common, engine='xlsxwriter') as writer: df_common.to_excel(writer, index=False)
-            col_exp1.download_button("📥 DOWNLOAD COMMON RULES (EXCEL)", xb_common.getvalue(), "Titan_Common_Rules.xlsx", use_container_width=True)
-            
-            xb_unique = io.BytesIO()
-            with pd.ExcelWriter(xb_unique, engine='xlsxwriter') as writer: df_unique.to_excel(writer, index=False)
-            col_exp2.download_button("📥 DOWNLOAD UNIQUE RULES (EXCEL)", xb_unique.getvalue(), "Titan_Unique_Rules.xlsx", use_container_width=True)
-            
+            xb_audit = io.BytesIO()
+            with pd.ExcelWriter(xb_audit, engine='xlsxwriter') as writer: df_audit.to_excel(writer, index=False)
+            st.download_button("📥 DOWNLOAD GAP ANALYSIS REPORT (EXCEL)", xb_audit.getvalue(), "Titan_Gap_Analysis.xlsx", use_container_width=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
 # --- INTEGRITY VALIDATOR ---
