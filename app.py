@@ -294,141 +294,191 @@ class TitanBackend:
 
 class BaselineBackend:
     """
-    Enhanced engine for Company Internal Standard Documents.
-    Extracted with Layout & Coordinate Sorting (Y-Axis & X-Axis) + Noise Filtering
-    untuk menembus struktur rumit Tabel Checklist PT PNM.
+    State-machine parser for Company Internal Standard Documents (e.g. PNM Web Server
+    Hardening Checklist). Correctly handles PDF table structure where:
+      - Rule ID sits alone on its own line  ("1.1  ")
+      - Parameter name follows on next line(s), ends when line has trailing double-space
+      - Standard value follows until a blank/compliance line
+      - Compliance (Y/N/NA) or empty comes after value
     """
-    def __init__(self):
-        # Match ID yang berdiri sendiri "10.3" atau "1.1.1" di satu baris
-        self.RE_RULE_ID = re.compile(r'^(\d+(?:\.\d+)+)$')
-        # Match ID beserta text dalam satu baris (fallback)
-        self.RE_RULE_INLINE = re.compile(r'^(\d+(?:\.\d+)+)\s+(.+)$')
-        # Filter kata-kata noise dokumen perusahaan
-        self.RE_NOISE = re.compile(
-            r'^(Page\s+\d+|Internal\s+Only.*|P\s+a\s+g\s+e\s*\|\s*\d+|'
-            r'DOKUMEN\s+STANDAR|Halaman.*|PNM.*|Permodalan\s+Nasional\s+Madani|'
-            r'Confidential.*|Divisi.*|Tanggal\s+Efektif.*|No\.\s+Revisi.*|No\.\s+Dokumen.*|'
-            r'KSD|RBZ|MUL|HYO|DHD|ORE|SPJ|Pelaksana|Kabag|Wakadiv|Kadiv|Dokumen\s+Terbatas.*|'
-            r'Latar\s+Belakang|Tujuan|Ruang\s+Lingkup|Referensi|.*Nomor\s+SK.*)$',
-            re.IGNORECASE
-        )
-        self.RE_COMPLIANCE = re.compile(r'^(Y|N|NA|N/A|YES|NO|TRUE|FALSE)$', re.IGNORECASE)
-        self.RE_SERVER_TYPE = re.compile(r'\b(Microsoft\s+IIS|IIS|Nginx|NGINX|Apache|Apache\s+HTTP)\b', re.IGNORECASE)
+    # Rule ID is the ONLY content on its line (digits.digits, all whitespace around)
+    RE_RULE_ID   = re.compile(r'^(\d+(?:\.\d+)+)\s*$')
+    # Single digit alone = category section number ("1", "2" ...)
+    RE_CAT_NUM   = re.compile(r'^(\d+)\s*$')
+    # Compliance cell values
+    RE_COMP_CELL = re.compile(r'^(Y|N|NA|N/A|YES|NO)\s*$', re.IGNORECASE)
+    # Server type header like "b. Nginx" or "a. Microsoft IIS"
+    RE_SERVER_HDR = re.compile(
+        r'^[a-c]\.\s*(Microsoft\s+IIS|IIS|Nginx|NGINX|Apache)', re.IGNORECASE)
+    # Lines to skip (headers, footers, signatures)
+    RE_NOISE = re.compile(
+        r'^(Dokumen Terbatas|DOKUMEN STANDAR|\(Dokumen Security|Divisi\s*$|'
+        r'Tanggal Efektif|No\. Revisi|No\. Dokumen|Halaman\s*:|Halaman\s*$|'
+        r'KSD\s*$|RBZ\s*$|MUL\s*$|HYO\s*$|DHD\s*$|ORE\s*$|SPJ\s*$|'
+        r'Pelaksana\s*$|Kabag\s*$|Wakadiv\s*$|Kadiv\s*$|'
+        r'Reff\.|Nama Parameter|Standart Value|Complia|nce\s*$|'
+        r'Comment|Commen|ts\s*$|\(Y/N\)|\(Y/N/N|RIWAYAT|Revisi Oleh|'
+        r'Keterangan|Penyesuaian|Penambahan|Kholidah|Syadiah|'
+        r'Operasional\s*$|Security\s*$|Teknologi\s*$|Informasi\s*$|'
+        r'dan\s*$|:\s*$|:\s*0\.|:\s*PNM|:\s*\d)', re.IGNORECASE
+    )
 
-    def _detect_server_type(self, text: str) -> str:
-        m = self.RE_SERVER_TYPE.search(text)
-        if m:
-            raw = m.group(1).strip().upper()
-            if "IIS" in raw: return "IIS"
-            if "NGINX" in raw: return "Nginx"
-            if "APACHE" in raw: return "Apache"
-        return "General"
+    @staticmethod
+    def _ends_with_double_space(line: str) -> bool:
+        """PDF table column boundary: line ends with 2+ trailing spaces."""
+        return len(line) - len(line.rstrip()) >= 2
+
+    @staticmethod
+    def _is_blank(line: str) -> bool:
+        return line.strip() == ""
+
+    def _sort_key(self, rule_id: str) -> list:
+        try: return [int(p) for p in rule_id.split(".")]
+        except: return [0]
 
     def process_pdf(self, pdf_bytes: bytes, filename: str) -> Tuple[List[dict], dict]:
         start_time = time.time()
-        log_event("BASELINE_ENGINE", f"Initializing Enhanced Company Baseline Parser for {filename}")
-        
+        log_event("BASELINE_ENGINE", f"Initializing State-Machine Baseline Parser for {filename}")
+
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         num_pages = len(doc)
-        
-        cache = []
+
+        # Collect all lines across the whole document
+        all_lines: List[str] = []
         for page in doc:
-            blocks = page.get_text("blocks")
-            # Urutkan secara vertikal lalu horizontal (Y lalu X) agar pembacaan tabel dipaksa dari Kiri ke Kanan
-            blocks.sort(key=lambda b: (round(b[1], -1), round(b[0], -1)))
-            
-            for b in blocks:
-                text = b[4].strip()
-                clean_lines = []
-                for line in text.split('\n'):
-                    cl = line.strip()
-                    # Skip noise lines completely
-                    if cl and not self.RE_NOISE.match(cl):
-                        clean_lines.append(cl)
-                
-                if clean_lines:
-                    # Gabungkan kembali block teks yang relevan
-                    cache.append(" ".join(clean_lines))
-                    
-        baseline_rules = {}
-        current_id = None
-        current_server = "General"
-        
-        title_buffer = ""
-        value_buffer = ""
-        comp_buffer = ""
-        step = 0
-        
-        def save_rule():
-            if current_id:
-                title = title_buffer.strip()
-                if not title: title = "Parameter Requirement / Standard Config"
-                
-                baseline_rules[f"{current_server}:{current_id}"] = {
-                    "rule_id": current_id,
-                    "server_type": current_server,
-                    "category": current_id.split('.')[0],
-                    "baseline_title": title,
-                    "standard_value": value_buffer.strip() if value_buffer else "N/A",
-                    "compliance": comp_buffer.strip() if comp_buffer else "Not Specified",
-                    "status": "Implemented in Baseline"
-                }
-
-        for item in cache:
-            srv = self._detect_server_type(item)
-            if srv != "General":
-                current_server = srv
-            
-            m_id = self.RE_RULE_ID.match(item)
-            m_inline = self.RE_RULE_INLINE.match(item)
-
-            if m_id:
-                save_rule()
-                current_id = m_id.group(1)
-                title_buffer = ""
-                value_buffer = ""
-                comp_buffer = ""
-                step = 1 # Ekspektasi title
-            elif m_inline:
-                save_rule()
-                current_id = m_inline.group(1)
-                title_buffer = m_inline.group(2)
-                value_buffer = ""
-                comp_buffer = ""
-                step = 2 # Sudah ada title, ekspektasi value
-            elif current_id:
-                if self.RE_COMPLIANCE.match(item) and step >= 2:
-                    comp_buffer = item.upper()
-                    step = 4
-                else:
-                    if step == 1:
-                        title_buffer = item
-                        step = 2
-                    elif step == 2:
-                        value_buffer = item
-                        step = 3
-                    elif step == 3:
-                        if len(item) < 100:
-                            value_buffer += " " + item
-
-        save_rule()
-
+            for ln in page.get_text().split('\n'):
+                all_lines.append(ln)
         doc.close()
         gc.collect()
-        
+
+        # ---- State machine ----
+        results_dict: Dict[str, dict] = {}
+        current_server   = "IIS"
+        current_category = ""
+        pending_cat_name = False   # next non-noise line = category name
+        current_id       = None
+        state            = "IDLE"  # IDLE → PARAM → VALUE → COMP → IDLE
+        param_lines:  List[str] = []
+        value_lines:  List[str] = []
+        compliance_val = ""
+
+        def flush():
+            nonlocal current_id, param_lines, value_lines, compliance_val
+            if not current_id: return
+            # Skip revision-history fake IDs (0.0, 0.1 etc.)
+            if current_id.startswith("0."): return
+            param = " ".join(param_lines).strip()
+            # Fix PDF hyphen line-wraps: "non-↵system" → "non-system"
+            param = re.sub(r'-\s+', '-', param)
+            value = " ".join(value_lines).strip()
+            key = f"{current_server}:{current_id}"
+            if key not in results_dict:
+                results_dict[key] = {
+                    "rule_id"       : current_id,
+                    "server_type"   : current_server,
+                    "category"      : current_category,
+                    "baseline_title": param if param else "N/A",
+                    "standard_value": value if value else "N/A",
+                    "compliance"    : compliance_val.strip() if compliance_val.strip() else "N/A",
+                    "status"        : "Implemented in Baseline"
+                }
+
+        stop_parsing = False
+        for raw in all_lines:
+            line     = raw.rstrip('\n')
+            stripped = line.strip()
+
+            # Stop at revision history section (end of standards content)
+            if re.match(r'^RIWAYAT\s+REVISI', stripped, re.IGNORECASE):
+                stop_parsing = True
+            if stop_parsing:
+                continue
+
+            # -- Noise filter --
+            if not stripped or self.RE_NOISE.match(stripped):
+                continue
+
+            # -- Server type header ("b. Nginx", "a. Microsoft IIS") --
+            srv_m = self.RE_SERVER_HDR.match(stripped)
+            if srv_m:
+                flush(); current_id = None; state = "IDLE"
+                s = srv_m.group(1).upper()
+                if "IIS" in s:   current_server = "IIS"
+                elif "NGINX" in s: current_server = "Nginx"
+                else:              current_server = "Apache"
+                current_category = ""
+                pending_cat_name = False
+                continue
+
+            # -- Category number ("1", "2", "3" alone on a line) --
+            if self.RE_CAT_NUM.match(stripped):
+                pending_cat_name = True
+                continue
+
+            # -- Category name (line immediately after category number) --
+            if pending_cat_name:
+                if not self.RE_RULE_ID.match(stripped):
+                    flush(); current_id = None; state = "IDLE"
+                    current_category = stripped
+                    pending_cat_name = False
+                    continue
+                else:
+                    pending_cat_name = False
+                    # fall through to rule ID handling below
+
+            # -- Rule ID line ("1.1  ", "2.3.4 ") --
+            if self.RE_RULE_ID.match(stripped):
+                flush()
+                current_id    = stripped
+                param_lines   = []
+                value_lines   = []
+                compliance_val = ""
+                state         = "PARAM"
+                continue
+
+            # ---- State transitions ----
+            if state == "PARAM":
+                if self._is_blank(line):
+                    state = "VALUE"
+                elif self._ends_with_double_space(line):
+                    if stripped: param_lines.append(stripped)
+                    state = "VALUE"
+                else:
+                    if stripped: param_lines.append(stripped)
+
+            elif state == "VALUE":
+                if self._is_blank(line):
+                    compliance_val = ""
+                    state = "COMP"
+                elif self.RE_COMP_CELL.match(stripped):
+                    compliance_val = stripped
+                    state = "COMP"
+                else:
+                    if stripped: value_lines.append(stripped)
+
+            elif state == "COMP":
+                # Comments column — skip, go back to idle
+                state = "IDLE"
+
+        flush()
+
         exec_time = time.time() - start_time
-        log_event("SUCCESS", f"Baseline Extraction completed. Found {len(baseline_rules)} controls.", "SUCCESS")
-        
-        sorted_keys = sorted(
-            baseline_rules.keys(),
-            key=lambda x: [int(p) if p.isdigit() else 0 for p in baseline_rules[x]["rule_id"].split(".")]
-        )
-        result = [baseline_rules[k] for k in sorted_keys]
+        total = len(results_dict)
+        log_event("SUCCESS",
+                  f"Baseline Extraction complete in {exec_time:.2f}s — "
+                  f"{total} controls extracted across "
+                  f"{len(set(v['server_type'] for v in results_dict.values()))} server types.",
+                  "SUCCESS")
+
+        # Sort by rule_id numerically, then by server type
+        sorted_keys = sorted(results_dict.keys(),
+                             key=lambda k: self._sort_key(results_dict[k]["rule_id"]))
+        result = [results_dict[k] for k in sorted_keys]
         report = {
-            "pages": num_pages,
-            "extracted": len(result),
-            "exec_time": exec_time,
-            "server_types": list(set(r["server_type"] for r in result))
+            "pages"       : num_pages,
+            "extracted"   : total,
+            "exec_time"   : exec_time,
+            "server_types": list(set(r["server_type"] for r in result)),
         }
         return result, report
 
@@ -453,9 +503,15 @@ class GapAnalysisEngine:
 
     @staticmethod
     def run(cis_data: List[dict], base_data: List[dict], server_filter: str = "All") -> dict:
+        """
+        Returns comprehensive gap analysis result dict.
+        """
+        # Build lookup: rule_id -> baseline record
         base_lookup: Dict[str, dict] = {}
         for b in base_data:
             rid = b["rule_id"]
+            srv = b.get("server_type", "General")
+            # Allow both exact match and server-filtered match
             base_lookup.setdefault(rid, []).append(b)
 
         cis_ids = [r["rule_id"] for r in cis_data]
@@ -466,6 +522,7 @@ class GapAnalysisEngine:
             rid = r["rule_id"]
             matches = base_lookup.get(rid, [])
 
+            # Filter by server type if requested
             if server_filter != "All" and matches:
                 matches = [m for m in matches if m.get("server_type", "General") == server_filter]
 
@@ -494,8 +551,10 @@ class GapAnalysisEngine:
         covered_df = df[df["Covered in Baseline"]]
         missing_df = df[~df["Covered in Baseline"]]
 
+        # Gap breakdown by severity
         gap_by_severity = missing_df["Severity"].value_counts().to_dict()
 
+        # Coverage by category (first number of CIS ID)
         df["Section"] = df["CIS ID"].apply(lambda x: x.split(".")[0])
         section_cov = df.groupby("Section").apply(
             lambda g: round(g["Covered in Baseline"].sum() / len(g) * 100, 1)
@@ -525,6 +584,7 @@ class GapAnalysisEngine:
         with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
             wb = writer.book
 
+            # --- Formats ---
             fmt_title = wb.add_format({"bold": True, "font_size": 14, "bg_color": "#0D1424", "font_color": "#00E5FF", "border": 1})
             fmt_header = wb.add_format({"bold": True, "bg_color": "#1E2D4A", "font_color": "#FFFFFF", "border": 1, "align": "center"})
             fmt_covered = wb.add_format({"bg_color": "#063B0D", "font_color": "#00FF66", "border": 1})
@@ -536,6 +596,7 @@ class GapAnalysisEngine:
             fmt_pct_good = wb.add_format({"bg_color": "#063B0D", "font_color": "#00FF66", "border": 1, "num_format": "0.0%"})
             fmt_pct_bad = wb.add_format({"bg_color": "#3B0606", "font_color": "#FF0033", "border": 1, "num_format": "0.0%"})
 
+            # ---- Sheet 1: Executive Summary ----
             ws_sum = wb.add_worksheet("Executive Summary")
             ws_sum.set_column("A:A", 35)
             ws_sum.set_column("B:B", 20)
@@ -560,6 +621,7 @@ class GapAnalysisEngine:
                 ws_sum.write(row_off, 0, sev, fmt_normal)
                 ws_sum.write(row_off, 1, cnt, fmt_normal)
 
+            # ---- Sheet 2: Full Audit Matrix ----
             df_export = result["df"].copy()
             df_export.to_excel(writer, sheet_name="Full Audit Matrix", index=False, startrow=1)
             ws_full = writer.sheets["Full Audit Matrix"]
@@ -569,7 +631,7 @@ class GapAnalysisEngine:
             col_widths = [max(len(str(c)), df_export[c].astype(str).map(len).max()) for c in df_export.columns]
             for i, w in enumerate(col_widths):
                 ws_full.set_column(i, i, min(w + 4, 60))
-            
+            # Color rows
             status_col = list(df_export.columns).index("Status")
             sev_col = list(df_export.columns).index("Severity")
             for row_idx, row in enumerate(df_export.itertuples(index=False), start=2):
@@ -588,6 +650,7 @@ class GapAnalysisEngine:
                 for col_idx, val in enumerate(row):
                     ws_full.write(row_idx, col_idx, str(val), row_fmt)
 
+            # ---- Sheet 3: Missing Controls Only ----
             miss_df = result["missing_df"][["CIS ID", "CIS Requirement", "Severity", "Category"]].copy()
             miss_df = miss_df.sort_values("Severity", key=lambda s: s.map(GapAnalysisEngine.PRIORITY_ORDER))
             miss_df.to_excel(writer, sheet_name="Missing Controls", index=False, startrow=1)
@@ -605,6 +668,7 @@ class GapAnalysisEngine:
                 for col_idx, val in enumerate(row):
                     ws_miss.write(row_idx, col_idx, str(val), row_fmt)
 
+            # ---- Sheet 4: Section Coverage ----
             sec_df = result["section_coverage"].copy()
             sec_df.to_excel(writer, sheet_name="Section Coverage", index=False, startrow=1)
             ws_sec = writer.sheets["Section Coverage"]
@@ -665,7 +729,7 @@ with st.sidebar:
         "☁️ Upload Center",
         "🔍 Extracted Rules",
         "⚖️ Comparison Engine",
-        "🔴 Gap Analysis",
+        "🔴 Gap Analysis",           # NEW
         "🚨 Integrity Validator",
         "💾 Export Center",
         "💻 System Logs",
@@ -803,31 +867,97 @@ elif nav == "Extracted Rules":
 
 # --- COMPARISON ENGINE ---
 elif nav == "Comparison Engine":
-    st.title("⚖️ CROSS-FRAMEWORK COMPARISON")
-    if len(st.session_state.db) < 2:
-        st.warning("Requires at least 2 CIS frameworks for comparison.")
-    else:
-        targets = st.multiselect("SELECT CIS FRAMEWORKS", list(st.session_state.db.keys()), default=list(st.session_state.db.keys())[:2])
-        if len(targets) >= 2:
+    st.title("⚖️ CROSS-FRAMEWORK & AUDIT ENGINE")
+    comp_tab1, comp_tab2 = st.tabs(["🔄 MULTI-CIS COMPARISON", "🚨 CIS vs COMPANY BASELINE AUDIT"])
+    with comp_tab1:
+        if len(st.session_state.db) < 2:
+            st.warning("Requires at least 2 CIS frameworks for comparison.")
+        else:
+            targets = st.multiselect("SELECT CIS FRAMEWORKS", list(st.session_state.db.keys()), default=list(st.session_state.db.keys())[:2])
+            if len(targets) >= 2:
+                st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
+                sets = {name: set(rule['rule_id'] for rule in st.session_state.db[name]['data']) for name in targets}
+                common_ids = set.intersection(*sets.values())
+                all_ids = sorted(list(set.union(*sets.values())), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0])
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Total Unique Rules Assessed", len(all_ids))
+                cc2.metric("Common Intersections", len(common_ids))
+                cc3.metric("Divergence Factor", f"{((len(all_ids) - len(common_ids)) / len(all_ids) * 100):.1f}%")
+                st.markdown("### MATRIX DIFF")
+                comp_rows = []
+                for rid in all_ids:
+                    row = {"Rule ID": rid}
+                    for name in targets:
+                        rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
+                        row[name] = rule['title'] if rule else "❌ MISSING"
+                    comp_rows.append(row)
+                comp_df = pd.DataFrame(comp_rows)
+                def color_missing(val): return f"color: {'#FF0033' if val == '❌ MISSING' else 'inherit'}"
+                st.dataframe(comp_df.style.map(color_missing), use_container_width=True, hide_index=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+    with comp_tab2:
+        if not st.session_state.db or not st.session_state.baseline_db:
+            st.warning("Audit requires at least 1 CIS Benchmark AND 1 Company Baseline.")
+        else:
+            col_sel1, col_sel2, col_sel3 = st.columns(3)
+            sel_cis = col_sel1.selectbox("Target CIS Benchmark", list(st.session_state.db.keys()))
+            sel_base = col_sel2.selectbox("Company Baseline", list(st.session_state.baseline_db.keys()))
+            base_data = st.session_state.baseline_db[sel_base]["data"]
+            srv_types = ["All"] + list(set(r.get("server_type", "General") for r in base_data))
+            srv_filter = col_sel3.selectbox("Filter by Server Type", srv_types)
+
+            cis_data = st.session_state.db[sel_cis]["data"]
+            result = GapAnalysisEngine.run(cis_data, base_data, srv_filter)
+            df_audit = result["df"]
+
             st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-            sets = {name: set(rule['rule_id'] for rule in st.session_state.db[name]['data']) for name in targets}
-            common_ids = set.intersection(*sets.values())
-            all_ids = sorted(list(set.union(*sets.values())), key=lambda x: [int(p) for p in x.split(".")] if re.match(r'^\d', x) else [0])
-            cc1, cc2, cc3 = st.columns(3)
-            cc1.metric("Total Unique Rules Assessed", len(all_ids))
-            cc2.metric("Common Intersections", len(common_ids))
-            cc3.metric("Divergence Factor", f"{((len(all_ids) - len(common_ids)) / len(all_ids) * 100):.1f}%")
-            st.markdown("### MATRIX DIFF")
-            comp_rows = []
-            for rid in all_ids:
-                row = {"Rule ID": rid}
-                for name in targets:
-                    rule = next((r for r in st.session_state.db[name]['data'] if r['rule_id'] == rid), None)
-                    row[name] = rule['title'] if rule else "❌ MISSING"
-                comp_rows.append(row)
-            comp_df = pd.DataFrame(comp_rows)
-            def color_missing(val): return f"color: {'#FF0033' if val == '❌ MISSING' else 'inherit'}"
-            st.dataframe(comp_df.style.map(color_missing), use_container_width=True, hide_index=True)
+            ac1, ac2, ac3, ac4 = st.columns(4)
+            ac1.metric("CIS Controls Target", result["total"])
+            ac2.metric("✅ Covered in Baseline", result["covered_count"])
+            ac3.metric("❌ Missing in Baseline", result["missing_count"])
+            ac4.metric("Coverage %", f"{result['coverage_pct']}%")
+
+            # Progress bar
+            coverage_ratio = result["coverage_pct"] / 100
+            bar_color = "#00FF66" if coverage_ratio >= 0.8 else "#FF9900" if coverage_ratio >= 0.5 else "#FF0033"
+            st.markdown(f"""
+                <div style="margin:10px 0;">
+                    <div style="background:#1E2D4A; border-radius:4px; height:18px; width:100%;">
+                        <div style="background:{bar_color}; width:{result['coverage_pct']}%; height:18px; border-radius:4px;
+                             display:flex; align-items:center; justify-content:center;">
+                            <span style="font-family:Fira Code; font-size:11px; color:#000; font-weight:bold;">
+                                {result['coverage_pct']}% Covered
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("### 📋 AUDIT GAP MATRIX")
+            def color_audit(val):
+                if "✅" in str(val): return "color: #00FF66"
+                if "❌" in str(val): return "color: #FF0033; font-weight: bold"
+                return ""
+            def color_sev(val):
+                if val == "Critical": return "color: #FF0033; font-weight: bold"
+                if val == "High": return "color: #FF9900"
+                if val == "Medium": return "color: #00E5FF"
+                return "color: #A0AEC0"
+
+            display_df = df_audit[["CIS ID", "CIS Requirement", "Severity", "Status",
+                                    "Baseline Server Type", "Baseline Parameter", "Baseline Std Value", "Compliance Declared"]]
+            st.dataframe(
+                display_df.style.map(color_audit, subset=["Status"]).map(color_sev, subset=["Severity"]),
+                use_container_width=True, height=500, hide_index=True
+            )
+
+            xls_bytes = GapAnalysisEngine.export_excel(result, sel_cis, sel_base)
+            st.download_button(
+                "📥 DOWNLOAD FULL AUDIT REPORT (EXCEL)",
+                xls_bytes, "Titan_Audit_Report.xlsx",
+                "application/vnd.ms-excel", use_container_width=True
+            )
             st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -931,6 +1061,7 @@ elif nav == "Gap Analysis":
         if missing_df.empty:
             st.success("🎯 No missing controls! Your baseline covers all CIS requirements.")
         else:
+            # Filters
             filt1, filt2, filt3 = st.columns(3)
             sev_opts = ["All"] + [s for s in ["Critical", "High", "Medium", "Low"] if s in missing_df["Severity"].values]
             sel_sev = filt1.selectbox("Filter Severity", sev_opts, key="gap_sev_filt")
@@ -951,6 +1082,7 @@ elif nav == "Gap Analysis":
 
             st.markdown(f"**Showing {len(filtered)} missing control(s)**")
 
+            # Render per-severity colored cards
             sev_colors_map = {"Critical": "#FF0033", "High": "#FF9900", "Medium": "#00E5FF", "Low": "#A0AEC0"}
             sev_bg_map = {"Critical": "rgba(255,0,51,0.12)", "High": "rgba(255,153,0,0.10)",
                           "Medium": "rgba(0,229,255,0.08)", "Low": "rgba(160,174,192,0.06)"}
@@ -978,6 +1110,7 @@ elif nav == "Gap Analysis":
 
         st.markdown("---")
 
+        # ---- COVERED CONTROLS (expandable) ----
         with st.expander(f"✅ VIEW COVERED CONTROLS ({result_g['covered_count']} items)", expanded=False):
             covered_display = result_g["covered_df"][["CIS ID", "CIS Requirement", "Severity",
                                                         "Baseline Server Type", "Baseline Parameter",
@@ -985,6 +1118,8 @@ elif nav == "Gap Analysis":
             st.dataframe(covered_display, use_container_width=True, hide_index=True)
 
         st.markdown("---")
+
+        # ---- EXPORT ----
         st.markdown("### 💾 EXPORT GAP ANALYSIS")
         ex1, ex2 = st.columns(2)
         xls_g = GapAnalysisEngine.export_excel(result_g, sel_cis_g, sel_base_g)
@@ -993,6 +1128,7 @@ elif nav == "Gap Analysis":
         csv_miss = result_g["missing_df"][["CIS ID", "CIS Requirement", "Severity", "Category"]].to_csv(index=False).encode()
         ex2.download_button("📄 EXPORT MISSING CONTROLS CSV", csv_miss, "Titan_MissingControls.csv",
                              "text/csv", use_container_width=True)
+
 
 # --- INTEGRITY VALIDATOR ---
 elif nav == "Integrity Validator":
