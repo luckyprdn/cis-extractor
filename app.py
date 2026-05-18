@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
-import pypdfium2 as pdfium
+import PyPDF2  # ⚡ Menggunakan PyPDF2 sesuai permintaan
 import re
 import time
 import io
 import json
 import gc
 import plotly.express as px
-import plotly.graph_objects as go
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Set, Tuple
 from datetime import datetime
@@ -161,7 +160,7 @@ def apply_theme():
     st.markdown(custom_css, unsafe_allow_html=True)
 
 # =============================================================================
-# 3. HYPER-EFFICIENT CORE ENGINE: TITAN PRO 5.5
+# 3. HYPER-EFFICIENT CORE ENGINE: TITAN PRO 5.5 (PyPDF2 Edition)
 # =============================================================================
 @dataclass
 class ParseResult:
@@ -222,17 +221,23 @@ class TitanBackend:
 
     def process_pdf(self, pdf_bytes: bytes, filename: str) -> Tuple[List[dict], dict]:
         start_time = time.time()
-        log_event("ENGINE", f"Initializing Titan Parser for {filename}")
+        log_event("ENGINE", f"Initializing Titan Parser (PyPDF2) for {filename}")
         
-        doc = pdfium.PdfDocument(pdf_bytes)
-        num_pages = len(doc)
+        # ⚡ Diubah ke PyPDF2 reader
+        pdf_file = io.BytesIO(pdf_bytes)
+        reader = PyPDF2.PdfReader(pdf_file)
+        num_pages = len(reader.pages)
+        
         log_event("OCR_CORE", f"Loaded document with {num_pages} pages")
         
         cache = []
         for i in range(num_pages):
-            page = doc[i]
-            textpage = page.get_textpage()
-            cache.append(self.RE_NOISE.sub("", textpage.get_text_range()))
+            page = reader.pages[i]
+            text = page.extract_text()
+            if text:
+                cache.append(self.RE_NOISE.sub("", text))
+            else:
+                cache.append("")
             
         toc_pages = {}
         master_ids = []
@@ -298,7 +303,6 @@ class TitanBackend:
             final_rules[current_id] = ParseResult(current_id, **{k: (self._extract_level(v) if k=="level" else self._clean_text(v)) for k,v in tmp.items()}, found_on_page=toc_pages.get(current_id, -1))
             final_rules[current_id].priority = self._get_priority(final_rules[current_id].title, final_rules[current_id].description)
 
-        doc.close()
         gc.collect() 
 
         exec_time = time.time() - start_time
@@ -341,7 +345,7 @@ with st.sidebar:
     st.markdown("""
         <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="font-size: 28px; margin: 0; color: #00E5FF; text-shadow: 0 0 15px #00E5FF;">🛡️ TITAN CORE</h1>
-            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.5 ENTERPRISE</p>
+            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.5 ENTERPRISE (PyPDF2)</p>
         </div>
     """, unsafe_allow_html=True)
     
