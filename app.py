@@ -126,21 +126,27 @@ def apply_theme():
         
         .watermark {{
             position: fixed;
-            bottom: 10px;
-            right: 20px;
+            bottom: 12px;
+            right: 24px;
             font-family: 'Fira Code', monospace;
             font-size: 10px;
             color: {primary_glow};
-            opacity: 0.4;
+            opacity: 0.6;
             pointer-events: none;
             z-index: 1000;
-            letter-spacing: 2px;
+            letter-spacing: 1.5px;
+            text-align: right;
+            line-height: 1.5;
         }}
         
         [data-testid="stDataFrame"] {{ font-family: 'Fira Code', monospace; font-size: 0.9rem; }}
         
     </style>
-    <div class="watermark">TITAN CIS EXTRACTOR // POWERED BY LUCKY PRADANA</div>
+    
+    <div class="watermark">
+        <b>TITAN CIS EXTRACTOR // ENGINE 5.6</b><br>
+        &copy; 2026 LUCKY PRADANA. ALL RIGHTS RESERVED.
+    </div>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
@@ -192,7 +198,6 @@ class TitanBackend:
     def _clean_text(self, parts: List[str], section_key: str = "") -> str:
         if not parts: return "N/A"
         
-        # 1. Deduplikasi Baris (menghindari duplikasi string persis pada satu kolom)
         seen = set()
         unique_parts = []
         for p in parts:
@@ -203,13 +208,11 @@ class TitanBackend:
                 
         raw = self.RE_NOISE.sub("", " ".join(unique_parts))
         
-        # 2. Filtrasi Referensi: Potong di "Additional Information" atau "CIS Controls"
         if section_key == "references":
             raw = re.split(r'(?i)(?:Additional\s+Information|CIS\s+Controls?)', raw)[0]
             
         text = self.RE_WHITESPACE.sub(" ", raw).strip()
         
-        # 3. Deduplikasi Ekstrem: Jika sebuah blok di-scan dua kali persis (contoh: "Level 1 Level 1")
         half = len(text) // 2
         if text and len(text) > 4 and text[:half].strip().lower() == text[half:].strip().lower():
             text = text[:half].strip()
@@ -340,7 +343,7 @@ with st.sidebar:
     st.markdown("""
         <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="font-size: 28px; margin: 0; color: #00E5FF; text-shadow: 0 0 15px #00E5FF;">🛡️ TITAN CORE</h1>
-            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.6 ENTERPRISE (PyMuPDF)</p>
+            <p style="font-size: 12px; color: #888; font-family: 'Fira Code', monospace; letter-spacing: 2px;">V 5.6 ENTERPRISE</p>
         </div>
     """, unsafe_allow_html=True)
     
@@ -361,6 +364,14 @@ with st.sidebar:
     st.markdown("<div style='font-family: Fira Code; font-size: 11px; color: #00E5FF;'>SYSTEM STATUS: ONLINE</div>", unsafe_allow_html=True)
     total_db = len(st.session_state.db)
     st.markdown(f"<div style='font-family: Fira Code; font-size: 11px; color: #A0AEC0;'>DATABASES LOADED: {total_db}</div>", unsafe_allow_html=True)
+    
+    # Sidebar Copyright Footer
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    st.markdown("""
+        <div style="text-align: center; font-size: 10px; color: rgba(226, 232, 240, 0.4); font-family: 'Fira Code', monospace; letter-spacing: 1px;">
+            &copy; 2026 LUCKY PRADANA<br>ALL RIGHTS RESERVED.
+        </div>
+    """, unsafe_allow_html=True)
 
 nav = selected_nav.split(" ", 1)[1]
 
@@ -415,7 +426,6 @@ if nav == "Dashboard Analytics":
             
         with col_chart2:
             st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-            # Level data might be lengthy now, limit for charting readability
             merged_df['level_short'] = merged_df['level'].apply(lambda x: str(x)[:40] + '...' if len(str(x)) > 40 else str(x))
             level_counts = merged_df['level_short'].value_counts().reset_index()
             level_counts.columns = ['Level', 'Count']
